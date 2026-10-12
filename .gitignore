@@ -1,0 +1,10 @@
+backend/.venv/
+backend/.env
+__pycache__/
+*.pyc
+web/node_modules/
+web/.next/
+web/next-env.d.ts
+tools/devdb/node_modules/
+tools/devdb/data/
+demo-logins.txt

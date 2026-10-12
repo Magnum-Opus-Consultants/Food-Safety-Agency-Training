@@ -1,0 +1,12 @@
+{
+  "name": "fsa-training-hub-devdb",
+  "private": true,
+  "description": "Local PostgreSQL for development. Downloads a Postgres binary via npm; no system install needed.",
+  "type": "module",
+  "scripts": {
+    "start": "node start.mjs"
+  },
+  "dependencies": {
+    "embedded-postgres": "18.4.0-beta.17"
+  }
+}
