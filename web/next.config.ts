@@ -5,6 +5,8 @@ import type { NextConfig } from "next";
 const API_ORIGIN = process.env.FSA_API_ORIGIN ?? "http://127.0.0.1:8210";
 
 const nextConfig: NextConfig = {
+  // Development-only indicator: keep it clear of the sidebar's Sign Out button.
+  devIndicators: { position: "bottom-right" },
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${API_ORIGIN}/api/:path*` }];
   },

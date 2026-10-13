@@ -45,7 +45,6 @@ export default function Accreditation() {
           </div>
         ))}
       </div>
-      <div className="source">Source: {q.data.meta.source as string}.</div>
       <AuditTrail />
     </>
   );

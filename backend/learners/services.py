@@ -53,7 +53,7 @@ def advance_enrolment(actor, enrolment, screen="enrolments"):
     """Rules 1 and 2: the gate blocks the stage and says what is outstanding."""
     reasons = advance_blockers(enrolment)
     if reasons:
-        raise Refusal("gate_incomplete", reasons, "This enrolment cannot advance until its entry gate is complete.")
+        raise Refusal("gate_incomplete", reasons, "This enrolment cannot advance until its minimum prerequisites are met.")
     before = enrolment.stage
     enrolment.stage_index += 1
     enrolment.modified_by = actor
@@ -65,22 +65,22 @@ def advance_enrolment(actor, enrolment, screen="enrolments"):
 @transaction.atomic
 def update_gate(actor, enrolment, prerequisite_result=None, grade10_evidence_held=None, screen="enrolments"):
     if enrolment.stage_index > 0:
-        raise Refusal("gate_closed", ["The entry gate was verified at an earlier stage and is now closed."],
-                      "The gate can only be changed while the enrolment is at Applied.")
+        raise Refusal("gate_closed", ["The minimum prerequisites were verified at an earlier stage and can no longer change."],
+                      "The minimum prerequisites can only be changed while the enrolment is at its first stage, Registered.")
     changes = []
     before = {"prerequisiteResult": str(enrolment.prerequisite_result) if enrolment.prerequisite_result is not None else None,
               "grade10EvidenceHeld": enrolment.grade10_evidence_held}
     if prerequisite_result is not None:
         enrolment.prerequisite_result = Decimal(str(prerequisite_result))
         changes.append(f"prerequisite result {prerequisite_result:g}%")
-    if grade10_evidence_held is not None:
-        enrolment.grade10_evidence_held = grade10_evidence_held
-        changes.append("Grade 10 evidence " + ("filed" if grade10_evidence_held else "withdrawn"))
+    if grade10_evidence_held:
+        raise Refusal("upload_required", ["Upload the Grade 10 document (PDF, JPG or PNG); the file is the evidence, not a tick."],
+                      "Grade 10 evidence is an uploaded document.", status=422)
     if not changes:
         raise Refusal("nothing_to_change", ["Send a prerequisite result or the Grade 10 evidence state."], "No change.")
     enrolment.modified_by = actor
     enrolment.save()
-    return record(actor, f"{enrolment.reference} entry gate updated — {', '.join(changes)}", enrolment, screen=screen,
+    return record(actor, f"{enrolment.reference} minimum prerequisites updated — {', '.join(changes)}", enrolment, screen=screen,
                   before=before)
 
 

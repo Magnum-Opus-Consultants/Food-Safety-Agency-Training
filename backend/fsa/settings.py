@@ -19,7 +19,8 @@ ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").sp
 # Demo mode: seeded accounts sign in from a picker, and the business clock is pinned
 # (default 2026-09-09, the prototype's date) and can be moved by the training manager.
 DEMO_MODE = env_bool("FSA_DEMO_MODE", True)
-DEMO_TODAY = os.environ.get("FSA_DEMO_TODAY", "2026-09-09")
+# Blank = the real date. Set (YYYY-MM-DD) to pin the business date, e.g. for a scripted walkthrough.
+DEMO_TODAY = os.environ.get("FSA_DEMO_TODAY", "")
 
 # POPIA: keys for identity numbers (see core/pii.py). Production must supply both; development
 # derives stable keys from the secret key so a fresh checkout works.
@@ -128,5 +129,14 @@ X_FRAME_OPTIONS = "DENY"
 # Tests hash the seeded passwords with a fast hasher; everything else uses Django's PBKDF2 default.
 import sys  # noqa: E402
 
+# Uploaded evidence (Grade 10 documents). Private: never served as static files, only streamed by the
+# API to a signed-in user with the learners segment. Object storage replaces this folder in production.
+FSA_FILE_ROOT = Path(os.environ.get("FSA_FILE_ROOT", BASE_DIR / "private-files"))
+FSA_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+
 if len(sys.argv) > 1 and sys.argv[1] == "test":
     PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+    # The acceptance tests check the prototype's scenarios, which are dated around 2026-09-09.
+    DEMO_TODAY = "2026-09-09"
+    import tempfile
+    FSA_FILE_ROOT = Path(tempfile.mkdtemp(prefix="fsa-test-files-"))

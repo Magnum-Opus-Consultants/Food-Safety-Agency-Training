@@ -21,6 +21,14 @@ from learners.models import Certificate, Enrolment, Learner, Moderation, Result
 from oversight.models import Rotation
 
 D = dt.date.fromisoformat
+# What each seeded enquirer asked about (meeting review: accreditation, costs, online or in person,
+# duration, quote).
+SEED_TOPICS = {
+    "ENQ-0421": ["Costs", "Duration"], "ENQ-0420": ["Quote"], "ENQ-0419": ["Delivery", "Costs"],
+    "ENQ-0417": ["Accreditation", "Costs"], "ENQ-0415": ["Quote"], "ENQ-0411": ["Accreditation", "Duration"],
+    "ENQ-0408": ["Costs"],
+}
+SEED_NOTES = {"ENQ-0415": "Group of 12 delegates."}
 KEEP_TABLES = {"django_migrations", "django_content_type", "auth_permission", "auth_group", "auth_group_permissions"}
 
 
@@ -38,8 +46,11 @@ def truncate_all():
 @transaction.atomic
 def seed(passwords: dict[str, str] | None = None, write_file: bool = False) -> dict[str, str]:
     """Load the demo data. Returns {username: password}; optionally writes demo-logins.txt."""
-    today = D(settings.DEMO_TODAY)
-    DemoClock.objects.update_or_create(pk=1, defaults={"today": today})
+    # The prototype's data is dated around 2026-09-09. Pin that date only when FSA_DEMO_TODAY asks
+    # for it (the tests do); otherwise the hub runs on the real date and the sample data is as old as it is.
+    today = D(settings.DEMO_TODAY) if settings.DEMO_TODAY else D("2026-09-09")
+    if settings.DEMO_TODAY:
+        DemoClock.objects.update_or_create(pk=1, defaults={"today": today})
 
     # --- reference data ---------------------------------------------------------------
     for code, name in [("IMI", "IMI & Classification"), ("AUD", "Auditing"), ("VET", "Vet Services")]:
@@ -147,7 +158,7 @@ def seed(passwords: dict[str, str] | None = None, write_file: bool = False) -> d
     for area, name in [("EnquiryTriage", "P. Mokoena"), ("QuoteFollowUp", "P. Mokoena"),
                        ("LearnerRecords", "N. Sibeko"), ("Filing", "R. Adams")]:
         # Four weeks of rotation from the demo week, so moving the clock forward keeps an owner on duty.
-        Rotation.objects.create(function_area=area, member=acc[name], period=(monday, monday + dt.timedelta(days=28)))
+        Rotation.objects.create(function_area=area, member=acc[name], period=(monday, D("2027-01-01")))  # through 31 December
 
     # --- courses --------------------------------------------------------------------
     courses = {}
@@ -170,6 +181,15 @@ def seed(passwords: dict[str, str] | None = None, write_file: bool = False) -> d
         )
     courses["TRN-PME2"].prior_course = courses["TRN-PME1"]
     courses["TRN-PME2"].save()
+    from courses.models import EARLIEST, CourseRequirement
+
+    for c in courses.values():
+        CourseRequirement.objects.create(
+            course=c, version=1, effective_from=EARLIEST, kind=c.entry_gate,
+            pass_mark=Decimal("50") if c.entry_gate == "PrerequisiteAndGrade10" else None, prior_course=c.prior_course,
+            description=c.entry_requirement if c.entry_gate == "Documented" else "",
+            reason="Requirement in the course catalogue when the Training Hub went live",
+        )
 
     # --- organisations, contacts, enquiries, quotations --------------------------------
     orgs = {}
@@ -190,22 +210,24 @@ def seed(passwords: dict[str, str] | None = None, write_file: bool = False) -> d
         ("ENQ-0420", "Sibusiso Khumalo", "Rainbow, Hammarsdale", "Enquiry", "Email", 2, "TRN-MEP", "", 0, "P. Mokoena"),
         ("ENQ-0419", "Zanele Dube", "Cato Ridge Abattoir", "Enquiry", "WhatsApp", 4, "TRN-CLASS", "", 0, "Thandi Ncube"),
         ("ENQ-0417", "Anika van Wyk", "Sovereign Foods, Uitenhage", "Enquiry", "Phone", 5, "TRN-PME1", "", 1, "P. Mokoena"),
-        ("ENQ-0415", "Training desk", "Chalmar Beef, Bapsfontein", "Enquiry", "Email", 7, "TRN-HACCP", "HACCP awareness — group of 12", 2, "Naledi Phiri"),
+        ("ENQ-0415", "Training desk", "Chalmar Beef, Bapsfontein", "Enquiry", "Email", 7, "TRN-HACCP", "", 2, "Naledi Phiri"),
         ("ENQ-0411", "Dr M. Sithole", "University of Pretoria", "Enquiry", "Email", 12, "TRN-VET", "", 3, "P. Mokoena"),
         ("ENQ-0408", "Kobus Erasmus", "Bull Brand, Krugersdorp", "Enquiry", "Phone", 16, "TRN-GAME", "", 4, "Naledi Phiri"),
-        ("ENQ-0422", "Delegate — Cato Ridge", "Cato Ridge Abattoir", "Complaint", "DirectLine", 2, None,
+        ("ENQ-0422", "Delegate — Cato Ridge", "Cato Ridge Abattoir", "Complaint", "Phone", 2, None,
          "Attendance register for SES-0312 not signed; the delegate cannot be certificated until it is captured and locked.", 0, "Palesa Mpana"),
-        ("ENQ-0423", "Operations director", "Karan Beef, Heidelberg", "Opportunity", "DirectLine", 0, None,
+        ("ENQ-0423", "Operations director", "Karan Beef, Heidelberg", "Opportunity", "Phone", 0, None,
          "Group training agreement — red meat examiner plus classification refreshers across two sites.", 0, "Palesa Mpana"),
     ]:
         contact = Contact.objects.create(names=names, organisation=orgs[org])
         received = at(today - dt.timedelta(days=days), 9, 15)
         enquiries[ref] = Enquiry.objects.create(
             reference=ref, contact=contact, kind=kind, channel=channel, received_at=received,
+            enquiring_for="Company" if kind == "Enquiry" else "Individual",
             course=courses.get(course) if course else None, course_interest=interest, stage_index=stage,
             first_response_at=received + dt.timedelta(hours=20) if stage > 0 else None,
             resolved_at=received + dt.timedelta(days=2) if stage >= 3 else None,
             assigned_to=acc[owner],
+            topics=SEED_TOPICS.get(ref, []), notes=SEED_NOTES.get(ref, ""),
         )
     for ref, enq, course, basis, n, rands, issued in [
         ("QTE-0221", "ENQ-0420", "TRN-MEP", "PerGroup", 16, 68_400, "2026-09-05"),
@@ -281,7 +303,7 @@ def seed(passwords: dict[str, str] | None = None, write_file: bool = False) -> d
         block = blocks.get(blk) if blk else None
         enrol[ref] = Enrolment.objects.create(
             reference=ref, learner=learners[lrn], course=block.course if block else courses["TRN-PME1"],
-            plan_block=block, basis=basis, stage_index=stage,
+            plan_block=block, basis=basis, stage_index={0: 0, 3: 2, 4: 3}[stage],  # prototype numbering: 3 in training, 4 completed
             prerequisite_result=Decimal(test) if test is not None else None, grade10_evidence_held=g10,
             assigned_to=acc["N. Sibeko"],
         )
@@ -306,7 +328,7 @@ def seed(passwords: dict[str, str] | None = None, write_file: bool = False) -> d
         for i, n in enumerate(names):
             learner = Learner.objects.create(names=n, learner_type=kind, organisation=orgs.get(org) if org else None)
             Enrolment.objects.create(
-                learner=learner, course=block.course, plan_block=block, stage_index=2,
+                learner=learner, course=block.course, plan_block=block, stage_index=1,
                 basis="PerGroup" if kind == "Corporate" else "PerLearner",
                 prerequisite_result=Decimal(58 + (i * 7) % 35) if gated else None, grade10_evidence_held=True,
                 assigned_to=acc["N. Sibeko"],

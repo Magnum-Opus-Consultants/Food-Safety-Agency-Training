@@ -52,3 +52,21 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   if (!res.ok) throw new ApiError(res.status, json);
   return json as Envelope<T>;
 }
+
+/** Send a file as multipart form data. The browser sets the multipart boundary itself. */
+export async function upload<T>(path: string, file: File, screen?: string): Promise<Envelope<T>> {
+  await ensureCsrf();
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`/api/fsa${path}`, {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: { Accept: "application/json", "X-CSRFToken": csrfToken(), ...(screen ? { "X-FSA-Screen": screen } : {}) },
+    body: form,
+  });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!res.ok) throw new ApiError(res.status, json);
+  return json as Envelope<T>;
+}

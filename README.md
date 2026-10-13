@@ -10,7 +10,11 @@ important ones again by the database.
 
 ## Run it
 
-You need Node 20+ and Python 3.12+. Three terminals:
+**On Windows, double-click `start-demo.cmd`.** It opens the database, API and front end in three
+windows (skipping any already running); open http://localhost:3210 about a minute later, and close
+the windows to stop the demo.
+
+Or by hand — you need Node 20+ and Python 3.12+. Three terminals:
 
 ```bash
 # 1. Database — a local PostgreSQL 18 downloaded through npm (no system install)
@@ -69,18 +73,18 @@ intake, one audit entry per registration.
 
 1. **Individual, from an enquiry.** On the enquiry board, drag a card to *Registered* (or use
    **Register learner** on the card). The form opens prefilled from the enquiry; on save the learner,
-   the enrolment at *Applied* and the enquiry's move to Registered happen together. An enquiry cannot
-   reach Registered any other way. **Register a learner** on *Enrolments* does the same without an enquiry.
+   the enrolment at *Registered* (its first stage) and the enquiry's move to Registered happen together. An enquiry cannot
+   reach Registered any other way. **Register new learner** on *Enrolments* does the same without an enquiry.
 2. **Corporate group.** On *Quotes & corporate accounts*, **Add delegates** on a per-group quotation:
    paste the client's list (name, email, phone — or straight from Excel). Refused beyond the number
    quoted or the intake's free seats; all or nothing. The first delegates accept the quotation.
    Try QTE-0218 (Chalmar Beef, HACCP) onto PLN-13.
 3. **University cohort.** On *Universities & vet placements*, **Import cohort list**: upload the
    university's CSV or paste it (name, student number, email). Students are matched on student
-   number, so re-importing skips those already enrolled. Placement students start at *Registered*
+   number, so re-importing skips those already enrolled. Placement students start at *Confirmed*
    because the placement agreement is their entry requirement. Try University of Johannesburg onto PLN-08.
 
-The entry gate still governs everything that starts at *Applied*: prerequisite ≥ 50% **and** Grade 10.
+The entry gate still governs everything that starts at *Registered*: prerequisite ≥ 50% **and** Grade 10.
 
 **One person, one record.** Individuals and delegates need an SA ID or passport number (optional
 for university students, who have a student number). The number is validated (13 digits, a real

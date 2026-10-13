@@ -5,15 +5,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ReactNode } from "react";
+import { Fragment, ReactNode, useEffect } from "react";
 import { findNav } from "@/lib/nav";
 import type { ApiError, Tone } from "@/lib/api";
-import { useRegister, useScreen } from "@/lib/hooks";
+import { useFocusRef, useMe, useRegister, useScreen } from "@/lib/hooks";
 import type { AuditEntry } from "@/lib/api";
 
 // Rule 12: the status vocabulary is fixed. ok|warn|bad|na|info (the HR Hub's kinds) map to
-// Compliant / Observation / Finding / Pending / Info. Never pass, fail, problem or issue.
-const TONE_LABEL: Record<Tone, string> = { ok: "Compliant", warn: "Observation", bad: "Finding", na: "Pending", info: "Info" };
+// Plain words for the status badges: what the reader has to do, not audit jargon.
+const TONE_LABEL: Record<Tone, string> = { ok: "In order", warn: "Needs attention", bad: "Action required", na: "Pending", info: "Info" };
 
 export function Status({ tone, children }: { tone: Tone; children?: ReactNode }) {
   return <span className={`badge tone-${tone}`}>{children ?? TONE_LABEL[tone]}</span>;
@@ -35,10 +35,12 @@ export function PageHeader({ lead, statement }: { lead?: ReactNode; statement?: 
   );
 }
 
-export function Hero({ title, statement, stats }: { title: string; statement?: ReactNode; stats?: Stat[] }) {
+/** The page heading and its figures. Screens pass an explanatory title and statement, but they are not
+ *  shown: each page opens with its heading and its numbers, without commentary. */
+export function Hero({ stats }: { title?: string; statement?: ReactNode; stats?: Stat[] }) {
   return (
     <section className="hero">
-      <PageHeader lead={title} statement={statement} />
+      <PageHeader />
       {stats?.length ? (
         <div className="stats">
           {stats.map((s) => (
@@ -56,9 +58,17 @@ export function Hero({ title, statement, stats }: { title: string; statement?: R
 
 export type Column<T> = { key: string; label: string; render: (row: T) => ReactNode; mono?: boolean; width?: string };
 
-export function Register<T>({ rows, columns, source, rowKey, onRow, empty }: {
+export function Register<T>({ rows, columns, source, rowKey, onRow, empty, expanded }: {
   rows: T[]; columns: Column<T>[]; source?: string; rowKey: (r: T) => string; onRow?: (r: T) => void; empty?: string;
+  /** Details shown directly under a row, opening out of it (return null for a closed row). */
+  expanded?: (r: T) => ReactNode | null;
 }) {
+  // A link from elsewhere (the desk, Training home) can point at one row: it is highlighted and scrolled to.
+  const focus = useFocusRef();
+  const found = focus !== null && rows.some((r) => rowKey(r) === focus);
+  useEffect(() => {
+    if (found) document.getElementById(`row-${focus}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [found, focus]);
   return (
     <div>
       <div className="table-wrap">
@@ -69,15 +79,22 @@ export function Register<T>({ rows, columns, source, rowKey, onRow, empty }: {
           <tbody>
             {rows.length === 0 ? (
               <tr><td colSpan={columns.length} className="muted">{empty ?? "Nothing on this register."}</td></tr>
-            ) : rows.map((r) => (
-              <tr key={rowKey(r)} className={onRow ? "clickable" : undefined} onClick={onRow ? () => onRow(r) : undefined}>
-                {columns.map((c) => <td key={c.key} className={c.mono ? "mono" : undefined}>{c.render(r)}</td>)}
-              </tr>
-            ))}
+            ) : rows.map((r) => {
+              const detail = expanded?.(r) ?? null;
+              return (
+                <Fragment key={rowKey(r)}>
+                  <tr id={`row-${rowKey(r)}`} className={`${onRow ? "clickable" : ""}${detail ? " open" : ""}${focus === rowKey(r) ? " focused" : ""}`}
+                      onClick={onRow ? () => onRow(r) : undefined}
+                      aria-expanded={expanded ? !!detail : undefined}>
+                    {columns.map((c) => <td key={c.key} className={c.mono ? "mono" : undefined}>{c.render(r)}</td>)}
+                  </tr>
+                  {detail ? <tr className="row-detail"><td colSpan={columns.length}><div className="row-detail-body">{detail}</div></td></tr> : null}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
-      {source ? <div className="source">Source: {source}.</div> : null}
     </div>
   );
 }
@@ -104,10 +121,14 @@ export function SectionHead({ title, children }: { title: string; children?: Rea
 }
 
 /** Rule 11: every state change writes an audit entry, visible on the screen that caused it. */
+/** The trail at the foot of a screen. Shown only to directors and system administrators. */
 export function AuditTrail({ screen }: { screen?: string }) {
   const current = useScreen();
+  const me = useMe();
+  const allowed = me.data?.data.canSeeAudit ?? false;
   const key = screen ?? current;
-  const q = useRegister<AuditEntry[]>(`/audit?screen=${encodeURIComponent(key)}&take=12`);
+  const q = useRegister<AuditEntry[]>(`/audit?screen=${encodeURIComponent(key)}&take=12`, allowed);
+  if (!allowed) return null;
   const rows = q.data?.data ?? [];
   return (
     <section className="no-print">
@@ -127,7 +148,6 @@ export function AuditTrail({ screen }: { screen?: string }) {
           </div>
         )}
       </div>
-      <div className="source">Source: audit trail, last 12 entries from this screen.</div>
     </section>
   );
 }

@@ -28,6 +28,11 @@ ROLE_LABEL = dict(HUB_ROLES)
 
 # Roles that read every register (04-roles-and-access.md: "Every register, read only").
 READ_ALL_ROLES = {"TrainingManager", "Director", "SystemAdministrator"}
+# The audit trail (who changed what, and when) is read only by directors and system administrators.
+AUDIT_ROLES = {"Director", "SystemAdministrator"}
+# The head of department desk is the training manager's (the head of department), and directors and
+# system administrators, who read everything. Other staff work their own streams, not the desk.
+DESK_ROLES = {"TrainingManager", "Director", "SystemAdministrator"}
 # The department picture is open to every staff account: on login every role lands there first.
 DEPARTMENT_SEGMENTS = {"overview"}
 
@@ -100,6 +105,14 @@ class Account(AbstractBaseUser, PermissionsMixin, TrackedModel):
         if not hasattr(self, "_segment_cache"):
             self._segment_cache = {s.segment_id: s for s in self.segments.all()}
         return self._segment_cache
+
+    @property
+    def can_see_desk(self) -> bool:
+        return self.hub_role in DESK_ROLES
+
+    @property
+    def can_see_audit(self) -> bool:
+        return self.hub_role in AUDIT_ROLES
 
     def can(self, segment: str, write: bool = False) -> bool:
         if not self.is_active or self.is_suspended:

@@ -1,13 +1,12 @@
 "use client";
 
-import { AuditTrail } from "@/components/ui";
-import { StubScreen } from "@/components/stubs";
+// Contacts and accounts are views of the quotations register now: old links land on it.
+
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
 export default function Page() {
-  return (
-    <>
-      <StubScreen slug="contacts" />
-      <AuditTrail />
-    </>
-  );
+  const router = useRouter();
+  useEffect(() => { router.replace("/quotes"); }, [router]);
+  return null;
 }

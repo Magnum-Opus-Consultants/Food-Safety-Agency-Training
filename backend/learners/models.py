@@ -6,7 +6,10 @@ from delivery.models import PlanBlock, Session
 from demand.models import Contact, Organisation, Quotation
 from identity.models import Account
 
-ENR_STAGES = ["Applied", "Prerequisite verified", "Registered", "In training", "Completed"]
+# Registering the learner is the first stage and reserves their seat on the intake. Confirmed means
+# the minimum prerequisites are met and verified: from then on the learner is on the class list.
+ENR_STAGES = ["Registered", "Confirmed", "In training", "Completed"]
+CONFIRMED, IN_TRAINING, COMPLETED = 1, 2, 3
 
 
 class Learner(ReferencedModel):
@@ -59,7 +62,7 @@ class Enrolment(ReferencedModel):
     class Meta:
         ordering = ["reference"]
         constraints = [
-            models.CheckConstraint(condition=models.Q(stage_index__lte=4), name="enrolment_stage_range"),
+            models.CheckConstraint(condition=models.Q(stage_index__lte=3), name="enrolment_stage_range"),
             models.UniqueConstraint(fields=["learner", "plan_block"], condition=models.Q(is_active=True, plan_block__isnull=False),
                                     name="one_enrolment_per_learner_per_intake"),
         ]

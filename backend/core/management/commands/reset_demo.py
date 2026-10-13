@@ -20,5 +20,6 @@ class Command(BaseCommand):
                 raise CommandError("Cancelled")
         truncate_all()
         seed(write_file=True)
-        self.stdout.write(self.style.SUCCESS(f"Demo data loaded. Business date {settings.DEMO_TODAY}."))
+        self.stdout.write(self.style.SUCCESS(
+            f"Demo data loaded. Business date {settings.DEMO_TODAY or 'today (real date)'}."))
         self.stdout.write(f"Sign-in details written to {LOGINS_FILE}")

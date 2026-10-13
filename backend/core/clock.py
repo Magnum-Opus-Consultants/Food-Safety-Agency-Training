@@ -1,7 +1,8 @@
 """The business clock. Every SLA, expiry and deadline rule reads today() from here.
 
-In demo mode the date is pinned (default 2026-09-09) and can be moved by the training
-manager, so the department can watch a trigger fire. In production it is the real date.
+It is the real date. In demo mode the training manager can move it temporarily (the arrows on
+the date pill) to watch a trigger fire, and return it to today; FSA_DEMO_TODAY pins a start date
+(the automated tests pin 2026-09-09, the prototype's date).
 """
 import datetime as dt
 
@@ -16,8 +17,14 @@ def today() -> dt.date:
         row = DemoClock.objects.filter(pk=1).first()
         if row:
             return row.today
-        return dt.date.fromisoformat(settings.DEMO_TODAY)
+        if settings.DEMO_TODAY:
+            return dt.date.fromisoformat(settings.DEMO_TODAY)
     return timezone.localdate()
+
+
+def is_moved() -> bool:
+    """True while the demo clock is set away from the real date."""
+    return today() != timezone.localdate()
 
 
 def now() -> dt.datetime:
@@ -44,6 +51,22 @@ def working_days_since(value: dt.datetime | dt.date) -> int:
     holidays = set(PublicHoliday.objects.filter(day__gt=start, day__lte=end).values_list("day", flat=True))
     count, day = 0, start + dt.timedelta(days=1)
     while day <= end:
+        if day.isoweekday() < 6 and day not in holidays:
+            count += 1
+        day += dt.timedelta(days=1)
+    return count
+
+
+def working_days_between(start: dt.datetime, end: dt.datetime) -> int:
+    """Working days strictly after `start` up to and including `end` (both moments)."""
+    from core.models import PublicHoliday
+
+    a, b = local_date(start), local_date(end)
+    if b <= a:
+        return 0
+    holidays = set(PublicHoliday.objects.filter(day__gt=a, day__lte=b).values_list("day", flat=True))
+    count, day = 0, a + dt.timedelta(days=1)
+    while day <= b:
         if day.isoweekday() < 6 and day not in holidays:
             count += 1
         day += dt.timedelta(days=1)

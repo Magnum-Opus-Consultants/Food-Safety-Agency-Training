@@ -23,8 +23,8 @@ export default function Partnerships() {
         statement="Students are marked at the abattoir in cohorts of five. A report unsubmitted at fifteen days is an observation; past twenty days it is a finding."
         stats={[
           { v: String(rows.length), l: "Placements", c: "On the register" },
-          { v: String(rows.filter((r) => r.tone === "bad").length), l: "Findings", c: "Past twenty days" },
-          { v: String(rows.filter((r) => r.tone === "warn").length), l: "Observations", c: "Day fifteen or later" },
+          { v: String(rows.filter((r) => r.tone === "bad").length), l: "Action required", c: "Report past twenty days" },
+          { v: String(rows.filter((r) => r.tone === "warn").length), l: "Needs attention", c: "Report due within five days" },
           { v: "7", l: "University partners", c: "MUT, DUT, CUT, CPUT, UP, UJ, TUT" },
         ]}
       />

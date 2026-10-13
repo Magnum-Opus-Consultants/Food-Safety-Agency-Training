@@ -1,3 +1,4 @@
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
 
 from core.models import ReferencedModel, TrackedModel
@@ -5,7 +6,20 @@ from courses.models import Course
 from identity.models import Account
 
 ENQ_STAGES = ["New", "Responded", "Quoted", "Registered", "Closed — no take-up"]
+# What an enquirer asks about (meeting review, "General questions"). "Other" needs a description.
+ENQ_TOPICS = [
+    ("Accreditation", "Accreditation"),
+    ("Costs", "Costs"),
+    ("Delivery", "Online or in person"),
+    ("Duration", "Duration"),
+    ("Quote", "Quote"),
+    ("Other", "Other"),
+]
+TOPIC_LABEL = dict(ENQ_TOPICS)
 
+
+ENQUIRING_FOR = [("Company", "A company"), ("Individual", "Themselves")]
+FOR_LABEL = {"Company": "For a company", "Individual": "For themselves (individual)"}
 
 class Organisation(ReferencedModel):
     REF_PREFIX = "ORG"
@@ -36,14 +50,22 @@ class Enquiry(ReferencedModel):
     REF_PREFIX = "ENQ"
     contact = models.ForeignKey(Contact, on_delete=models.PROTECT, related_name="enquiries")
     kind = models.CharField(max_length=12, choices=[(c, c) for c in ("Enquiry", "Complaint", "Opportunity")], default="Enquiry")
-    channel = models.CharField(max_length=12, choices=[(c, c) for c in ("Phone", "Email", "WhatsApp", "DirectLine")])
+    # Who the training is for. A company enquiry (for its staff or a group) is quoted and lands on the
+    # quotations register. An individual asks for themselves: they may work at a company (recorded as
+    # their employer), but they are answered and registered directly, never quoted.
+    enquiring_for = models.CharField(max_length=12, choices=ENQUIRING_FOR, default="Individual")
+    channel = models.CharField(max_length=12, choices=[(c, c) for c in ("Phone", "Email", "WhatsApp")])
     received_at = models.DateTimeField()
     course = models.ForeignKey(Course, null=True, blank=True, on_delete=models.PROTECT)
+    # Enquiry: the training they meant when it is not a catalogue course. Complaint/opportunity: the details.
     course_interest = models.CharField(max_length=200, blank=True)
+    topics = ArrayField(models.CharField(max_length=16, choices=ENQ_TOPICS), default=list, blank=True)
+    topic_other = models.CharField(max_length=200, blank=True)
     stage_index = models.PositiveSmallIntegerField(default=0)
     first_response_at = models.DateTimeField(null=True, blank=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
     assigned_to = models.ForeignKey(Account, null=True, blank=True, on_delete=models.PROTECT, related_name="+")
+    notes = models.TextField(blank=True)
 
     class Meta:
         ordering = ["-received_at"]

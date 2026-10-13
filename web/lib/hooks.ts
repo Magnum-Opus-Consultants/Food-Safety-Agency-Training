@@ -2,13 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
-import { api, ApiError, Envelope } from "./api";
+import { useEffect, useState } from "react";
+import { api, ApiError, Envelope, upload } from "./api";
 import { findNav } from "./nav";
 
 export type Me = {
   ref: string; name: string; position: string; role: string; roleLabel: string;
-  segments: string[]; writes: string[]; canMoveClock: boolean;
+  segments: string[]; writes: string[]; canMoveClock: boolean; canSeeAudit: boolean; canSeeDesk: boolean;
 };
 
 export function useScreen() {
@@ -39,4 +39,28 @@ export function useAction<TBody = unknown, TData = unknown>(method: string, path
     onError: (e) => setRefusal(e),
   });
   return { ...m, refusal, clear: () => setRefusal(null) };
+}
+
+/** A file upload, with the same refusal handling and invalidation as useAction. */
+export function useUpload<TData = unknown>(path: (ref: string) => string) {
+  const qc = useQueryClient();
+  const screen = useScreen();
+  const [refusal, setRefusal] = useState<ApiError | null>(null);
+  const m = useMutation<Envelope<TData>, ApiError, { ref: string; file: File }>({
+    mutationFn: ({ ref, file }) => upload<TData>(path(ref), file, screen),
+    onMutate: () => setRefusal(null),
+    onSuccess: () => qc.invalidateQueries(),
+    onError: (e) => setRefusal(e),
+  });
+  return { ...m, refusal, clear: () => setRefusal(null) };
+}
+
+/** The record a link pointed at (?focus=QTE-0221), read once after the page loads. Registers
+ *  highlight and scroll to it; pages can also open it. */
+export function useFocusRef() {
+  const [focus, setFocus] = useState<string | null>(null);
+  useEffect(() => {
+    try { setFocus(new URLSearchParams(window.location.search).get("focus")); } catch { /* no window */ }
+  }, []);
+  return focus;
 }

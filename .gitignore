@@ -8,3 +8,4 @@ web/next-env.d.ts
 tools/devdb/node_modules/
 tools/devdb/data/
 demo-logins.txt
+backend/private-files/

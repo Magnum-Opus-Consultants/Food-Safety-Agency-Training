@@ -6,7 +6,7 @@
 
 Every route: consent recorded, a free seat on the chosen intake, no second enrolment on the same
 intake, the seat booked on the plan, one audit entry for the whole registration. A new enrolment
-starts at Applied, except university students, whose placement agreement is the entry requirement.
+starts at Registered (seat reserved), except university students, whose placement agreement is the entry requirement.
 """
 from dataclasses import dataclass
 from decimal import Decimal
@@ -17,7 +17,7 @@ from audit.services import record
 from core import clock
 from core.api_support import Refusal
 from delivery.models import PlanBlock
-from core import pii
+from core import phone, pii
 from demand.models import Enquiry, Organisation, Quotation
 from learners.models import Enrolment, Learner
 from oversight.models import Rotation
@@ -52,6 +52,9 @@ def _check_people(people: list[Person], need_number: bool = False, need_id: bool
             reasons.append(f"{who}: the student number is missing.")
         if p.email and "@" not in p.email:
             reasons.append(f"{who}: {p.email} is not an email address.")
+        p.phone, phone_problem = phone.normalise(p.phone)
+        if phone_problem:
+            reasons.append(f"{who}: phone {phone_problem}.")
         p.identity, problem = pii.parse(p.id_type, p.id_number)
         if problem:
             reasons.append(f"{who}: the ID number is not valid — {problem}.")
@@ -181,6 +184,11 @@ def register_individual(actor, person: Person, learner_type: str, organisation_n
         if enquiry.kind != "Enquiry":
             raise Refusal("not_an_enquiry", [f"{enquiry.reference} is a {enquiry.kind.lower()}, not a course enquiry."],
                           "Only a course enquiry registers a learner.")
+        if enquiry.enquiring_for == "Company":
+            raise Refusal("company_enquiry", [
+                f"{enquiry.reference} is for {enquiry.contact.organisation.name if enquiry.contact.organisation_id else 'a company'}: "
+                "register the people it is sending as a list on its quotation (Add delegates), not the person who enquired."],
+                "A company enquiry registers its delegates, not the enquirer.")
         if enquiry.enrolments.exists():
             raise Refusal("already_registered", [f"{enquiry.reference} already registered "
                                                  f"{enquiry.enrolments.first().learner.names}."], "Nothing to register.")
@@ -203,10 +211,21 @@ def register_individual(actor, person: Person, learner_type: str, organisation_n
             org = (Organisation.objects.filter(name__iexact=organisation_name.strip()).first()
                    or Organisation.objects.create(name=organisation_name.strip(), created_by=actor))
         learner = _find_or_new(person, learner_type, org, actor)
+    if grade10_evidence_held:
+        raise Refusal("upload_required", ["Register the learner first, then upload the Grade 10 document to the enrolment."],
+                      "Grade 10 evidence is an uploaded document.", status=422)
     if prerequisite_result is not None and not 0 <= prerequisite_result <= 100:
         raise Refusal("invalid", ["A prerequisite result is a percentage from 0 to 100."], "Check the result.", status=422)
 
     block = _intake(block_ref)
+    from courses.requirements import for_block
+
+    req = for_block(block)
+    if prerequisite_result is not None and req is not None and req.gated and prerequisite_result < req.pass_mark:
+        raise Refusal("below_minimum", [f"A prerequisite test result of {prerequisite_result:g}% is below the "
+                                        f"{req.pass_mark.normalize():f}% minimum for {block.course.title} on {block.reference}. "
+                                        f"Leave the result blank if the learner will write or rewrite the test."],
+                      "The learner does not meet the minimum prerequisites.", status=422)
     _not_already_on([learner], block)
     _check_seats(block, 1)
     basis = "PerGroup" if learner.learner_type == "Corporate" else (
@@ -226,21 +245,27 @@ def register_individual(actor, person: Person, learner_type: str, organisation_n
         enquiry.modified_by = actor
         enquiry.save()
         what += f"; {enquiry.reference} moved from {before} to Registered"
+        quote = enquiry.quotations.filter(is_active=True, state="Issued").order_by("-created_at").first()
+        if quote is not None:
+            # The individual took up their quotation: it is accepted and the enrolment points to it.
+            quote.state, quote.modified_by = "Accepted", actor
+            quote.save()
+            enrolment.quotation = quote
+            enrolment.save(update_fields=["quotation"])
+            what += f"; {quote.reference} accepted"
     audit = record(actor, what, enrolment, screen=screen)
     return enrolment, audit
 
 
-# --- route 2: a corporate group, from a per-group quotation ----------------------------------
+# --- route 2: a company's people, registered as a list against its quotation ----------------
 
 @transaction.atomic
 def register_delegates(actor, quotation_ref: str, block_ref: str, people: list[Person], consent: bool, screen="quotes"):
-    quotation = (Quotation.objects.select_for_update(of=("self",)).select_related("organisation", "course", "contact")
+    quotation = (Quotation.objects.select_for_update(of=("self",)).select_related("organisation", "course", "contact", "enquiry")
                  .filter(reference=quotation_ref, is_active=True).first())
     if quotation is None:
         raise Refusal("not_found", [f"No quotation {quotation_ref}."], "Not found.", status=404)
     reasons = []
-    if quotation.basis != "PerGroup":
-        reasons.append(f"{quotation.reference} is quoted per learner. Register each learner from their enquiry.")
     if quotation.state not in ("Issued", "Accepted"):
         reasons.append(f"{quotation.reference} is {quotation.state.lower()}; delegates are added to an issued or accepted quotation.")
     if quotation.organisation_id is None:
@@ -261,7 +286,24 @@ def register_delegates(actor, quotation_ref: str, block_ref: str, people: list[P
     learners = [_find_or_new(p, "Corporate", quotation.organisation, actor) for p in people]
     _not_already_on(learners, block)
     _check_seats(block, len(learners))
-    enrolments = [_enrol(actor, l, block, "PerGroup", quotation=quotation) for l in learners]
+    enquiry = quotation.enquiry
+    enrolments = [_enrol(actor, l, block, "PerGroup" if quotation.basis == "PerGroup" else "PerLearner", quotation=quotation,
+                         enquiry=enquiry) for l in learners]
+    moved = ""
+    if enquiry is not None and enquiry.stage_index < 3:
+        # The company's enquiry is answered by the people it registered.
+        was = enquiry.stage
+        now = clock.now()
+        enquiry.stage_index = 3
+        enquiry.first_response_at = enquiry.first_response_at or now
+        enquiry.resolved_at = enquiry.resolved_at or now
+        enquiry.modified_by = actor
+        enquiry.save()
+        moved = f"; {enquiry.reference} moved from {was} to Registered"
+    if quotation.organisation.relationship == "Prospect":
+        quotation.organisation.relationship = "Client"  # delegates registered: the company is now a client
+        quotation.organisation.modified_by = actor
+        quotation.organisation.save()
     before = quotation.state
     if quotation.state == "Issued":
         quotation.state = "Accepted"
@@ -269,7 +311,7 @@ def register_delegates(actor, quotation_ref: str, block_ref: str, people: list[P
         quotation.save()
     audit = record(actor, f"{len(enrolments)} {'delegate' if len(enrolments) == 1 else 'delegates'} of "
                           f"{quotation.organisation.name} registered on {block.reference} against {quotation.reference}"
-                          + (" — quotation accepted" if before == "Issued" else "") + _matched_note(learners),
+                          + (" — quotation accepted" if before == "Issued" else "") + moved + _matched_note(learners),
                    quotation, screen=screen, after={"enrolments": [e.reference for e in enrolments]})
     return enrolments, audit
 
@@ -300,8 +342,8 @@ def import_cohort(actor, organisation_ref: str, block_ref: str, people: list[Per
         raise Refusal("already_enrolled", [f"Every student on this list is already enrolled on {block.reference}."],
                       "Nothing to import.")
     _check_seats(block, len(new))
-    # The placement agreement is the entry requirement, so students start at Registered.
-    enrolments = [_enrol(actor, l, block, "UniversityAgreement", stage=2) for l in new]
+    # The placement agreement is the entry requirement, so students start at Confirmed.
+    enrolments = [_enrol(actor, l, block, "UniversityAgreement", stage=1) for l in new]
     placement = Placement.objects.filter(organisation=university, plan_block=block, is_active=True).first()
     if placement is None:
         placement = Placement.objects.create(

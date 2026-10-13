@@ -13,7 +13,7 @@ FUNCTION_AREAS = [
 
 
 class Rotation(models.Model):
-    """"Running without her" is held by a rotation. The rotation says who is NEXT;
+    """Work handled by the team is held by a rotation. The rotation says who is NEXT;
     the AssignedTo stamp on each item says who DID it, so history survives turnover."""
 
     function_area = models.CharField(max_length=16, choices=FUNCTION_AREAS)

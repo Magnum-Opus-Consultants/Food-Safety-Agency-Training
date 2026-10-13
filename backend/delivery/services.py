@@ -9,9 +9,9 @@ from learners.models import Learner
 
 
 def roster(session):
-    """Learners registered onto the session's block (Registered stage or later)."""
+    """Learners confirmed onto the session's block (Confirmed stage or later)."""
     return (
-        Learner.objects.filter(enrolments__plan_block_id=session.plan_block_id, enrolments__stage_index__gte=2,
+        Learner.objects.filter(enrolments__plan_block_id=session.plan_block_id, enrolments__stage_index__gte=1,
                                enrolments__is_active=True)
         .select_related("organisation").distinct().order_by("reference")
     )
@@ -87,3 +87,37 @@ def confirm_block(actor, block, screen="plan"):
     block.save()
     return record(actor, f"{block.reference} confirmed — {block.course.title}, {block.start_date.isoformat()}",
                   block, screen=screen, before={"state": "Draft"}, after={"state": "Confirmed"})
+
+
+def not_on_roster(session) -> list[dict]:
+    """Learners registered on the intake but not confirmed, so not on the class list, and why."""
+    from learners.models import Enrolment
+    from learners.rules import gate_blockers
+
+    rows = []
+    for e in (Enrolment.objects.filter(plan_block_id=session.plan_block_id, is_active=True, stage_index=0)
+              .select_related("learner", "course", "plan_block").order_by("learner__names")):
+        reasons = gate_blockers(e)
+        rows.append({"enrolment": e.reference, "learner": e.learner.names, "stage": e.stage,
+                     "why": "; ".join(reasons).lower() if reasons else "prerequisites met, waiting to be confirmed"})
+    return rows
+
+
+@transaction.atomic
+def add_late_entry(actor, session, learner_ref: str, present: bool, reason: str, screen="sessions"):
+    """A learner who has no row on a locked register (confirmed after capture, or missed) is added as
+    a new audited row with its reason. The register stays locked; nothing is edited."""
+    if not hasattr(session, "register"):
+        raise Refusal("register_not_locked", ["The register is not locked yet: mark the learner in the capture."],
+                      "Capture the register instead.")
+    if not reason.strip():
+        raise Refusal("reason_required", ["State why the learner is added after the register was locked."], "A late entry needs a reason.")
+    learner = next((l for l in roster(session) if l.reference == learner_ref), None)
+    if learner is None:
+        raise Refusal("not_on_roster", [f"{learner_ref} is not confirmed onto this session."], "Confirm the learner first.")
+    if learner.id in effective_attendance(session):
+        raise Refusal("already_marked", [f"{learner.names} is already on this register; record a correction instead."], "Already marked.")
+    Attendance.objects.create(session=session, learner=learner, present=present, captured_at=clock.now(), captured_by=actor,
+                              late_entry=True, correction_reason=reason.strip())
+    return record(actor, f"{session.reference} late entry for {learner.names}: {'present' if present else 'absent'} — {reason.strip()}",
+                  session, screen=screen, after={"present": present, "late": True})

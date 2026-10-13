@@ -50,9 +50,9 @@ def partnerships(request):
         if p.report_submitted_at:
             position, tone = f"Submitted {p.report_submitted_at:%Y-%m-%d}", "ok"
         elif days > 20:
-            position, tone = f"Finding — {days} days after period end", "bad"
+            position, tone = f"Report overdue — {days} days after period end", "bad"
         elif days >= 15:
-            position, tone = f"Observation — day {days} of 20", "warn"
+            position, tone = f"Report due soon — day {days} of 20", "warn"
         elif days >= 0:
             position, tone = f"Day {days} of 20", "info"
         else:

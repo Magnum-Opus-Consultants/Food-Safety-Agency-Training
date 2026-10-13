@@ -11,26 +11,29 @@ export type NavItem = {
   segment: string;
   badge?: string;
   built: boolean;
+  /** Shown indented under the item above it: a view of the same register. */
+  sub?: boolean;
+  /** Shown only to accounts with this permission from /me, on top of the segment. */
+  needs?: "canSeeDesk";
 };
 
 export const NAV: { group: string; items: NavItem[] }[] = [
   { group: "Overview", items: [
     { href: "/training-home", icon: "fas fa-home", label: "Training home", screen: "home", segment: "overview", built: true },
-    { href: "/desk", icon: "fas fa-user-tie", label: "Head of department desk", screen: "desk", segment: "overview", badge: "DeskEscalated", built: true },
+    { href: "/desk", icon: "fas fa-user-tie", label: "Head of department desk", screen: "desk", segment: "overview", badge: "DeskEscalated", built: true, needs: "canSeeDesk" },
     { href: "/management-dashboard", icon: "fas fa-chart-line", label: "Management dashboard", screen: "dashboard", segment: "reporting", built: false },
     { href: "/monthly-report", icon: "fas fa-file-alt", label: "Monthly management report", screen: "report", segment: "reporting", built: false },
   ] },
-  { group: "Demand", items: [
-    { href: "/contacts", icon: "fas fa-address-book", label: "Contacts & accounts", screen: "contacts", segment: "demand", built: false },
+  { group: "Clients & sales", items: [
     { href: "/enquiries", icon: "fas fa-inbox", label: "Enquiry queue", screen: "enquiries", segment: "demand", badge: "StaleEnquiries", built: true },
-    { href: "/quotes", icon: "fas fa-file-invoice-dollar", label: "Quotes & corporate accounts", screen: "quotes", segment: "demand", built: true },
+    { href: "/quotes", icon: "fas fa-file-invoice-dollar", label: "Quotations", screen: "quotes", segment: "demand", built: true },
   ] },
   { group: "Courses", items: [
     { href: "/catalogue", icon: "fas fa-book-open", label: "Course catalogue", screen: "catalogue", segment: "courses", built: true },
     { href: "/development", icon: "fas fa-pencil-ruler", label: "Course development & accreditation", screen: "development", segment: "courses", built: false },
     { href: "/packs", icon: "fas fa-box-archive", label: "Assessment & moderation packs", screen: "packs", segment: "courses", built: false },
   ] },
-  { group: "Delivery", items: [
+  { group: "Training delivery", items: [
     { href: "/plan", icon: "fas fa-calendar-alt", label: "Training plan & schedule", screen: "plan", segment: "delivery", built: true },
     { href: "/sessions", icon: "fas fa-clipboard-check", label: "Sessions & attendance", screen: "sessions", segment: "delivery", badge: "RegistersOutstanding", built: true },
     { href: "/facilitators", icon: "fas fa-id-badge", label: "Facilitators & accreditation", screen: "facilitators", segment: "delivery", badge: "AccredFlags", built: true },

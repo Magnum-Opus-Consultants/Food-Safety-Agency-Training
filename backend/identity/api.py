@@ -88,16 +88,19 @@ def me_dict(a: Account):
     d["segments"] = a.readable_segments()
     d["writes"] = [s for s in d["segments"] if a.can(s, write=True)]
     d["canMoveClock"] = settings.DEMO_MODE and a.hub_role in ("TrainingManager", "SystemAdministrator")
+    d["canSeeAudit"] = a.can_see_audit
+    d["canSeeDesk"] = a.can_see_desk
     return d
 
 
 @router.get("/me")
 def me(request):
-    return ok(me_dict(request.user), today=clock.today().isoformat(), demo=settings.DEMO_MODE)
+    return ok(me_dict(request.user), today=clock.today().isoformat(), demo=settings.DEMO_MODE, clockMoved=clock.is_moved())
 
 
 class ClockMove(Schema):
-    days: int
+    days: int = 0
+    reset: bool = False
 
 
 @router.get("/clock")
@@ -114,12 +117,18 @@ def move_clock(request, body: ClockMove):
         raise Refusal("bad_step", ["Move the clock by at most 31 days at a time."], "Step too large.")
     with transaction.atomic():
         before = clock.today()
-        row, _ = DemoClock.objects.get_or_create(pk=1, defaults={"today": before})
-        row.today = before + dt.timedelta(days=body.days)
-        row.save()
-        audit = record(request.user, f"Demo clock moved from {before.isoformat()} to {row.today.isoformat()}",
-                       screen=request.headers.get("X-FSA-Screen", ""))
-    return ok({"today": row.today.isoformat()}, audit=audit)
+        if body.reset:
+            DemoClock.objects.filter(pk=1).delete()
+            after = clock.today()
+            what = f"Demo clock returned from {before.isoformat()} to today, {after.isoformat()}"
+        else:
+            row, _ = DemoClock.objects.get_or_create(pk=1, defaults={"today": before})
+            row.today = before + dt.timedelta(days=body.days)
+            row.save()
+            after = row.today
+            what = f"Demo clock moved from {before.isoformat()} to {after.isoformat()}"
+        audit = record(request.user, what, screen=request.headers.get("X-FSA-Screen", ""))
+    return ok({"today": after.isoformat(), "moved": clock.is_moved()}, audit=audit)
 
 
 @router.get("/users")

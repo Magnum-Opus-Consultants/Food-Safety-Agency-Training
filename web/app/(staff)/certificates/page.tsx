@@ -11,7 +11,7 @@ type Candidate = { ref: string; learner: string; course: string; mark: number; p
 export default function Certification() {
   const q = useRegister<{ issued: Issued[]; candidates: Candidate[]; canIssue: boolean }>("/certificates");
   const issue = useAction<{ resultRef: string }, Issued>("POST", "/certificates");
-  const [preview, setPreview] = useState<Issued | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
   if (q.error) return <LoadError error={q.error} />;
   if (!q.data) return <Loading />;
   const { issued, candidates, canIssue } = q.data.data;
@@ -39,22 +39,21 @@ export default function Certification() {
           { key: "act", label: "", render: (c) => canIssue ? (
             // Deliberately not disabled for unmoderated results: the API's refusal names why (rule 2).
             <button className="btn btn-sm" disabled={issue.isPending}
-                    onClick={() => issue.mutate({ resultRef: c.ref }, { onSuccess: (r) => setPreview(r.data) })}>Issue certificate</button>
+                    onClick={() => issue.mutate({ resultRef: c.ref }, { onSuccess: (r) => setPreview(r.data.ref) })}>Issue certificate</button>
           ) : null },
         ]} />
-      {preview ? (
-        <section className="card cert">
-          <span className="eyebrow">FSA Academy · Certificate of competence</span>
-          <h2>{preview.learner}</h2>
-          <p style={{ margin: 0 }}>has been found competent in</p>
-          <b>{preview.course}</b>
-          <p className="mono small muted" style={{ margin: 0 }}>{preview.ref} · issued {preview.issuedAt} · verification {preview.verificationCode}</p>
-          <p className="small muted" style={{ margin: 0 }}>Signed by {preview.issuedBy}, training manager. Filed to the depository as {preview.depositoryRef}.</p>
-          <button className="btn btn-sm no-print" onClick={() => setPreview(null)}>Close preview</button>
-        </section>
-      ) : null}
       <SectionHead title="Certification register" />
-      <Register rows={issued} rowKey={(c) => c.ref} source={q.data.meta.source as string} onRow={setPreview}
+      <Register rows={issued} rowKey={(c) => c.ref} onRow={(c) => setPreview(c.ref === preview ? null : c.ref)}
+        expanded={(c) => (c.ref === preview ? (
+          <div className="cert">
+            <span className="eyebrow">FSA Academy · Certificate of competence</span>
+            <h2>{c.learner}</h2>
+            <p style={{ margin: 0 }}>has been found competent in</p>
+            <b>{c.course}</b>
+            <p className="small muted" style={{ margin: 0 }}>{c.ref} · issued {c.issuedAt} · verification {c.verificationCode}</p>
+            <p className="small muted" style={{ margin: 0 }}>Signed by {c.issuedBy}, training manager. Filed to the depository as {c.depositoryRef}.</p>
+          </div>
+        ) : null)}
         columns={[
           { key: "ref", label: "Certificate", render: (c) => c.ref, mono: true },
           { key: "learner", label: "Learner", render: (c) => <b>{c.learner}</b> },

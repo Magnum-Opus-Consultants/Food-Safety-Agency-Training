@@ -42,7 +42,7 @@ export default function Shell({ children }: { children: ReactNode }) {
     queryFn: () => api<NavCounts>("/nav-counts"),
     enabled: me.isSuccess,
   });
-  const clock = useAction<{ days: number }>("POST", "/clock");
+  const clock = useAction<{ days?: number; reset?: boolean }>("POST", "/clock");
   const logout = useAction("POST", "/auth/logout");
 
   useEffect(() => {
@@ -61,6 +61,7 @@ export default function Shell({ children }: { children: ReactNode }) {
   }
   const user = me.data.data;
   const today = (counts.data?.meta.today as string | undefined) ?? (me.data.meta.today as string | undefined);
+  const moved = Boolean(counts.data?.meta.clockMoved ?? me.data.meta.clockMoved);
   const where = findNav(pathname);
   const badges = counts.data?.data ?? {};
 
@@ -81,7 +82,8 @@ export default function Shell({ children }: { children: ReactNode }) {
           </button>
           <nav className="sidebar-nav">
             {NAV.map((g) => {
-              const items = g.items.filter((i) => user.segments.includes(i.segment));
+              // Screens not built yet are left out of the rail rather than shown as placeholders.
+              const items = g.items.filter((i) => i.built && user.segments.includes(i.segment) && (!i.needs || user[i.needs]));
               if (!items.length) return null;
               return (
                 <div key={g.group}>
@@ -92,7 +94,7 @@ export default function Shell({ children }: { children: ReactNode }) {
                       const active = where?.item.href === i.href;
                       return (
                         <li key={i.href}>
-                          <Link href={i.href} className={`side-item${active ? " active" : ""}`} aria-current={active ? "page" : undefined}
+                          <Link href={i.href} className={`side-item${active ? " active" : ""}${i.sub && !collapsed ? " sub" : ""}`} aria-current={active ? "page" : undefined}
                                 title={collapsed ? i.label : undefined} onClick={() => setOpen(false)}>
                             <i className={i.icon} aria-hidden />
                             {!collapsed ? <span>{i.label}</span> : null}
@@ -130,17 +132,20 @@ export default function Shell({ children }: { children: ReactNode }) {
         </div>
         <main className="content">
           <div className="clock-slot">
-            <div className="clock" title="Business date">
+            <div className={`clock${moved ? " moved" : ""}`} title={moved ? "Demo date: moved away from today" : "Today"}>
               {user.canMoveClock ? (
                 <button disabled={clock.isPending} onClick={() => clock.mutate({ days: -1 })} aria-label="Move the demo clock back a day">
                   <i className="fas fa-chevron-left" aria-hidden />
                 </button>
               ) : null}
-              <span><i className="far fa-calendar" aria-hidden /> {longDate(today)}</span>
+              <span>{moved ? <b className="clock-flag">Demo date</b> : null}<i className="far fa-calendar" aria-hidden /> {longDate(today)}</span>
               {user.canMoveClock ? (
                 <button disabled={clock.isPending} onClick={() => clock.mutate({ days: 1 })} aria-label="Move the demo clock forward a day">
                   <i className="fas fa-chevron-right" aria-hidden />
                 </button>
+              ) : null}
+              {user.canMoveClock && moved ? (
+                <button className="clock-today" disabled={clock.isPending} onClick={() => clock.mutate({ reset: true })}>Back to today</button>
               ) : null}
             </div>
           </div>
