@@ -1,5 +1,6 @@
 from django.db.models import Count, Q
 import datetime as dt
+from pathlib import Path
 
 from django.conf import settings
 from ninja import File, Router, Schema
@@ -25,7 +26,7 @@ def depository(request):
         "position": f"{l.outstanding} outstanding" if l.outstanding else "Compliant",
         "tone": "bad" if l.outstanding else "ok",
     } for l in libs]
-    outstanding = [{"ref": d.reference, "title": d.title, "library": d.library.name}
+    outstanding = [{"ref": d.reference, "title": d.title, "library": d.library.name, "source": _source(d)}
                    for lib in libs for d in lib.documents.filter(state="Outstanding", is_active=True)]
     return ok({"libraries": rows, "outstanding": outstanding}, source="Training depository")
 
@@ -481,11 +482,197 @@ def university_rule(request, ref: str, body: Rule):
     return ok({"ref": uni.reference, "rule": uni.facilitator_body_id}, audit=audit)
 
 
+def risk_dict(r, history=None):
+    from audit.models import AuditEntry
+
+    breached = r.trigger_breached_at is not None
+    tone = "na" if not r.is_active else "bad" if r.rating == "High" or breached else ("warn" if r.rating == "Medium" else "ok")
+    entries = history if history is not None else AuditEntry.objects.filter(entity_type="assurance.risk", entity_ref=r.reference).order_by("-at")[:12]
+    return {
+        "ref": r.reference, "risk": r.risk, "cause": r.cause, "rating": r.rating, "trigger": r.escalation_trigger,
+        "breached": breached, "breachedAt": stamp(r.trigger_breached_at), "owner": r.owner.display_name, "ownerRef": r.owner.reference,
+        "position": r.position or ("Closed" if not r.is_active else "—"), "tone": tone, "open": r.is_active, "closedReason": r.closed_reason,
+        "reviewedAt": stamp(r.reviewed_at), "reviewNote": r.review_note,
+        "enquiries": [{"ref": e.reference, "kind": e.kind, "name": e.contact.names, "details": e.course_interest or (e.course.title if e.course_id else ""),
+                       "received": iso(e.received_at.date()), "stage": e.stage} for e in r.enquiries.all()],
+        "history": [{"at": stamp(h.at), "who": h.actor_name, "what": h.what} for h in entries],
+    }
+
+
+def _risks():
+    return Risk.objects.select_related("owner").prefetch_related("enquiries__contact", "enquiries__course")
+
+
 @router.get("/risks")
 def risks(request):
+    """Open risks first, then those closed in the last year (kept on record with their reason)."""
+    from demand.models import Enquiry
+    from identity.models import Account
+
     require(request, "assurance")
-    rows = [{"ref": r.reference, "risk": r.risk, "cause": r.cause, "rating": r.rating, "trigger": r.escalation_trigger,
-             "breached": r.trigger_breached_at is not None, "owner": r.owner.display_name, "position": r.position,
-             "tone": "bad" if r.rating == "High" or r.trigger_breached_at else ("warn" if r.rating == "Medium" else "ok")}
-            for r in Risk.objects.filter(is_active=True).select_related("owner")]
-    return ok(rows, source="Risk and escalation register")
+    year_ago = clock.now() - dt.timedelta(days=365)
+    rows = [risk_dict(r) for r in _risks().filter(Q(is_active=True) | Q(modified_at__gte=year_ago, is_active=False)).order_by("-is_active", "reference")]
+    owners = Account.objects.filter(is_active=True, is_service_account=False).exclude(hub_role__in=["Facilitator", "Assessor"]).order_by("display_name")
+    complaints = (Enquiry.objects.filter(is_active=True, kind__in=["Complaint", "Opportunity"]).select_related("contact").order_by("-received_at")[:50])
+    return ok({"items": rows, "canEdit": request.user.can("assurance", write=True),
+               "owners": [{"ref": a.reference, "name": a.display_name} for a in owners],
+               "linkable": [{"ref": e.reference, "label": f"{e.reference} · {e.kind} · {e.contact.names}"
+                             + (f" — {e.course_interest[:60]}" if e.course_interest else "")} for e in complaints]},
+              source="Risk and escalation register")
+
+
+def _risk_or_404(ref):
+    r = _risks().filter(reference=ref).first()
+    if r is None:
+        raise Refusal("not_found", [f"No risk {ref}."], "Not found.", status=404)
+    return r
+
+
+class RiskIn(Schema):
+    risk: str = ""
+    cause: str = ""
+    rating: str = ""
+    trigger: str = ""
+    ownerRef: str = ""
+    position: str = ""
+
+
+class RiskEdit(Schema):
+    risk: str | None = None
+    cause: str | None = None
+    rating: str | None = None
+    trigger: str | None = None
+    ownerRef: str | None = None
+    position: str | None = None
+    breached: bool | None = None
+
+
+class Note(Schema):
+    note: str = ""
+
+
+class LinkIn(Schema):
+    enquiryRef: str
+
+
+@router.post("/risks")
+def add_risk(request, body: RiskIn):
+    from assurance import risks as svc
+
+    require(request, "assurance", write=True)
+    r, audit = svc.create(request.user, risk=body.risk, cause=body.cause, rating=body.rating, trigger=body.trigger,
+                          owner_ref=body.ownerRef, position=body.position, screen=_screen(request, "risk"))
+    return ok(risk_dict(_risk_or_404(r.reference)), audit=audit)
+
+
+@router.patch("/risks/{ref}")
+def edit_risk(request, ref: str, body: RiskEdit):
+    from assurance import risks as svc
+
+    require(request, "assurance", write=True)
+    r = _risk_or_404(ref)
+    audit = svc.update(request.user, r, body.dict(exclude_none=True), screen=_screen(request, "risk"))
+    return ok(risk_dict(_risk_or_404(ref)), audit=audit)
+
+
+@router.post("/risks/{ref}/review")
+def review_risk(request, ref: str, body: Note):
+    from assurance import risks as svc
+
+    require(request, "assurance", write=True)
+    audit = svc.review(request.user, _risk_or_404(ref), body.note, screen=_screen(request, "risk"))
+    return ok(risk_dict(_risk_or_404(ref)), audit=audit)
+
+
+@router.post("/risks/{ref}/close")
+def close_risk(request, ref: str, body: Note):
+    from assurance import risks as svc
+
+    require(request, "assurance", write=True)
+    audit = svc.close(request.user, _risk_or_404(ref), body.note, screen=_screen(request, "risk"))
+    return ok(risk_dict(_risk_or_404(ref)), audit=audit)
+
+
+@router.post("/risks/{ref}/enquiries")
+def link_risk(request, ref: str, body: LinkIn):
+    from assurance import risks as svc
+    from demand.models import Enquiry
+
+    require(request, "assurance", write=True)
+    e = Enquiry.objects.select_related("contact").filter(is_active=True, reference=body.enquiryRef).first()
+    if e is None:
+        raise Refusal("not_found", [f"No enquiry {body.enquiryRef}."], "Not found.", status=404)
+    audit = svc.link(request.user, _risk_or_404(ref), e, screen=_screen(request, "risk"))
+    return ok(risk_dict(_risk_or_404(ref)), audit=audit)
+
+
+@router.delete("/risks/{ref}/enquiries/{enquiry}")
+def unlink_risk(request, ref: str, enquiry: str):
+    from assurance import risks as svc
+    from demand.models import Enquiry
+
+    require(request, "assurance", write=True)
+    e = Enquiry.objects.select_related("contact").filter(reference=enquiry).first()
+    if e is None:
+        raise Refusal("not_found", [f"No enquiry {enquiry}."], "Not found.", status=404)
+    audit = svc.unlink(request.user, _risk_or_404(ref), e, screen=_screen(request, "risk"))
+    return ok(risk_dict(_risk_or_404(ref)), audit=audit)
+
+
+# --- the depository: what each library holds, and where each outstanding item is resolved ------------
+
+SOURCES = {  # entity type -> (page, label) where the record behind a document lives
+    "delivery.session": ("/sessions", "Open the session"),
+    "assurance.placement": ("/partnerships", "Open the placement"),
+    "learners.certificate": ("/certificates", "Open the certificate"),
+    "learners.result": ("/results", "Open the result"),
+    "assurance.accreditation": ("/accreditation", "Open the accreditation"),
+}
+
+
+def _source(d):
+    if d.entity_type in SOURCES and d.entity_ref:
+        page, label = SOURCES[d.entity_type]
+        return {"href": f"{page}?focus={d.entity_ref}", "label": label}
+    if d.entity_type.startswith("assurance.application.step"):
+        return {"href": f"/accreditation?focus={d.entity_ref}", "label": "Open the application"}
+    if d.entity_type.startswith("assurance.placement."):
+        return {"href": f"/partnerships?focus={d.entity_ref}", "label": "Open the placement"}
+    if d.entity_type.startswith("learners.enrolment"):
+        return {"href": f"/enrolments?focus={d.entity_ref}", "label": "Open the enrolment"}
+    return None
+
+
+@router.get("/depository/libraries/{code}")
+def library_documents(request, code: str):
+    from assurance.models import Document
+
+    require(request, "depository")
+    lib = Library.objects.filter(code=code).first()
+    if lib is None:
+        raise Refusal("not_found", [f"No library {code}."], "Not found.", status=404)
+    docs = Document.objects.filter(library=lib, is_active=True).select_related("created_by").order_by("-created_at", "-id")
+    return ok([{"ref": d.reference, "title": d.title, "state": d.state, "added": stamp(d.created_at),
+                "by": d.created_by.display_name if d.created_by_id else "System", "entityRef": d.entity_ref,
+                "file": f"/api/fsa/depository/documents/{d.reference}" if d.storage_key and (Path(settings.FSA_FILE_ROOT) / d.storage_key).exists() else None,
+                "source": _source(d)} for d in docs])
+
+
+@router.get("/depository/documents/{ref}")
+def depository_document(request, ref: str):
+    from django.http import FileResponse
+
+    from assurance.models import Document
+    from learners.evidence import MEDIA_TYPE
+
+    require(request, "depository")
+    d = Document.objects.filter(reference=ref, is_active=True).first()
+    path = Path(settings.FSA_FILE_ROOT) / d.storage_key if d and d.storage_key else None
+    if path is None or not path.exists():
+        raise Refusal("not_found", [f"No file is held for {ref}."], "Not found.", status=404)
+    ext = d.storage_key.rsplit(".", 1)[-1].lower()
+    response = FileResponse(path.open("rb"), content_type=MEDIA_TYPE.get(ext, "application/octet-stream"))
+    response["Content-Disposition"] = f'{"attachment" if request.GET.get("download") else "inline"}; filename="{d.reference}.{ext}"'
+    response["Cache-Control"] = "no-store"
+    response["X-Content-Type-Options"] = "nosniff"
+    return response

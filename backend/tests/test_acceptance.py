@@ -1622,3 +1622,44 @@ class SuperAdmin(Api):
         a = Account.objects.get(display_name="Test Superadmin")
         self.assertEqual(a.hub_role, "SystemAdministrator")
         self.assertTrue(all(a.can(code, write=True) for code in Segment.objects.values_list("code", flat=True)))
+
+
+class RiskRegister(Api):
+    """Risks are added, kept up to date, reviewed, linked to the complaints that show them, and closed with a reason."""
+
+    def test_a_risk_is_added_updated_linked_reviewed_and_closed(self):
+        self.login(PALESA)
+        bad = self.send("post", "/api/fsa/risks", {})
+        self.assertEqual(len(bad.json()["blockedBy"]), 5)
+        r = self.send("post", "/api/fsa/risks", {"risk": "Abattoir withdraws a placement at short notice", "cause": "Single abattoir per province",
+                                                 "rating": "Medium", "trigger": "Placement cancelled within 10 days of start", "ownerRef": PALESA})
+        self.assertEqual(r.status_code, 200, r.content)
+        ref = r.json()["data"]["ref"]
+        up = self.send("patch", f"/api/fsa/risks/{ref}", {"rating": "High", "breached": True, "position": "Second abattoir being approached"})
+        self.assertEqual(up.status_code, 200, up.content)
+        self.assertEqual((up.json()["data"]["rating"], up.json()["data"]["breached"], up.json()["data"]["tone"]), ("High", True, "bad"))
+        self.assertIn("rating Medium → High", up.json()["data"]["history"][0]["what"])
+        complaint = self.send("post", "/api/fsa/enquiries", {"names": "Abattoir manager", "channel": "Email", "kind": "Complaint",
+                                                            "interest": "Students arrived without PPE"}).json()["data"]["ref"]
+        linked = self.send("post", f"/api/fsa/risks/{ref}/enquiries", {"enquiryRef": complaint})
+        self.assertEqual([e["ref"] for e in linked.json()["data"]["enquiries"]], [complaint])
+        self.assertEqual(self.send("post", f"/api/fsa/risks/{ref}/review", {"note": ""}).status_code, 422)
+        self.assertEqual(self.send("post", f"/api/fsa/risks/{ref}/review", {"note": "Still live; meeting the abattoir on Friday."}).status_code, 200)
+        closed = self.send("post", f"/api/fsa/risks/{ref}/close", {"note": "Second abattoir signed"})
+        self.assertFalse(closed.json()["data"]["open"])
+        self.assertEqual(self.send("patch", f"/api/fsa/risks/{ref}", {"rating": "Low"}).json()["error"], "closed")
+        self.login(THANDI)
+        self.assertEqual(self.send("post", "/api/fsa/risks", {}).status_code, 403)
+
+
+class DepositoryLinks(Api):
+    def test_libraries_open_to_their_documents_and_outstanding_items_link_to_their_source(self):
+        self.login(PALESA)
+        d = self.get("/api/fsa/depository")["data"]
+        reg = next(o for o in d["outstanding"] if o["title"] == "Attendance register SES-0312")
+        self.assertEqual(reg["source"]["href"], "/sessions?focus=SES-0312")
+        plc = next(o for o in d["outstanding"] if o["title"].startswith("Placement report PLC-0006"))
+        self.assertEqual(plc["source"]["href"], "/partnerships?focus=PLC-0006")
+        docs = self.get("/api/fsa/depository/libraries/registers")["data"]
+        self.assertIn("Attendance register SES-0309", [x["title"] for x in docs])
+        self.assertEqual(self.client.get(f"/api/fsa/depository/documents/{docs[0]['ref']}").status_code, 404)  # recorded, no file held

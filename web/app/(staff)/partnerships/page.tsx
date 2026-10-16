@@ -8,7 +8,7 @@ import { useState } from "react";
 import { CohortImportForm, Modal } from "@/components/registration";
 import { AuditTrail, Blocked, Hero, LoadError, Loading, Register, SectionHead, Status } from "@/components/ui";
 import { ApiError, upload, type Tone } from "@/lib/api";
-import { useAction, useMe, useRegister, useScreen } from "@/lib/hooks";
+import { useAction, useMe, useRegister, useScreen, useFocusRef } from "@/lib/hooks";
 
 type Attendance = { present: number; of: number; percent: number } | null;
 type Student = { enrolment: string; learner: string; studentNumber: string; attendance: Attendance; result: string | null; mark: number | null;
@@ -28,6 +28,8 @@ export default function Partnerships() {
   const q = useRegister<Data>("/partnerships");
   const me = useMe();
   const [open, setOpen] = useState<string | null>(null);
+  const focus = useFocusRef();  // a link (?focus=SES-0312) opens that row
+  const shown = open ?? focus;
   const [importing, setImporting] = useState(false);
   const [done, setDone] = useState("");
   const [search, setSearch] = useState("");
@@ -61,8 +63,8 @@ export default function Partnerships() {
         <span className="small muted">{rows.length} of {items.length}</span>
       </div>
       <Register rows={rows} rowKey={(r) => r.ref} source={q.data.meta.source as string} empty="No placements match."
-        onRow={(r) => setOpen(r.ref === open ? null : r.ref)}
-        expanded={(r) => (r.ref !== open ? null : <Detail p={r} canRun={canRun} onDone={setDone} />)}
+        onRow={(r) => setOpen(r.ref === shown ? "" : r.ref)}
+        expanded={(r) => (r.ref !== shown ? null : <Detail p={r} canRun={canRun} onDone={setDone} />)}
         columns={[
           { key: "ref", label: "Placement", render: (r) => r.ref, mono: true },
           { key: "uni", label: "University", render: (r) => <><b>{r.university}</b>{r.rule ? <div className="small muted">{r.rule}-registered facilitators only</div> : null}</> },

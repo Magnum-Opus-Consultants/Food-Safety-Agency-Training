@@ -4,13 +4,15 @@ import { useState } from "react";
 import { SessionPanel } from "@/components/SessionPanel";
 import { AuditTrail, Hero, LoadError, Loading, Register, Stat, Status } from "@/components/ui";
 import type { SessionRow } from "@/lib/types";
-import { useRegister } from "@/lib/hooks";
+import { useRegister, useFocusRef } from "@/lib/hooks";
 
 
 const RANK: Record<string, number> = { Today: 0, "In progress": 0, Outstanding: 1, "Not yet delivered": 2, Locked: 3 };
 
 export default function Sessions() {
   const [open, setOpen] = useState<string | null>(null);
+  const focus = useFocusRef();  // a link (?focus=SES-0312) opens that row
+  const shown = open ?? focus;
   const [filter, setFilter] = useState({ q: "", register: "", facilitator: "", course: "", group: "", from: "", to: "" });
   const setF = (k: keyof typeof filter, v: string) => setFilter((x) => ({ ...x, [k]: v }));
   const q = useRegister<{ items: SessionRow[]; stats: Stat[]; scope: string }>("/sessions");
@@ -77,8 +79,8 @@ export default function Sessions() {
           {filtered ? <button className="btn btn-sm" onClick={() => setFilter({ q: "", register: "", facilitator: "", course: "", group: "", from: "", to: "" })}>Clear filters</button> : null}
         </div>
       </div>
-      <Register rows={items} rowKey={(s) => s.ref} empty={filtered ? "No session matches these filters." : undefined} onRow={(s) => setOpen(s.ref === open ? null : s.ref)}
-        expanded={(s) => (s.ref === open ? <SessionPanel code={s.ref} /> : null)} source={q.data.meta.source as string}
+      <Register rows={items} rowKey={(s) => s.ref} empty={filtered ? "No session matches these filters." : undefined} onRow={(s) => setOpen(s.ref === shown ? "" : s.ref)}
+        expanded={(s) => (s.ref === shown ? <SessionPanel code={s.ref} /> : null)} source={q.data.meta.source as string}
         columns={[
           { key: "ref", label: "Session", render: (s) => s.ref, mono: true },
           { key: "group", label: "Group", render: (s) => s.groups.length ? s.groups.map((g) => (
@@ -96,7 +98,7 @@ export default function Sessions() {
           // The action each register needs, so it is clear the row opens to do it.
           { key: "act", label: "", render: (s) => (
             <button className={`btn btn-sm${s.registerState === "Locked" || s.registerState === "Not yet delivered" ? "" : " btn-primary"}`}
-                    onClick={(e) => { e.stopPropagation(); setOpen(s.ref === open ? null : s.ref); }}>
+                    onClick={(e) => { e.stopPropagation(); setOpen(s.ref === shown ? "" : s.ref); }}>
               {s.registerState === "Locked" ? "View register" : s.registerState === "Not yet delivered" ? "View learners" : "Capture register"}
             </button>
           ) },

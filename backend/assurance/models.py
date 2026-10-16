@@ -82,6 +82,12 @@ class Risk(ReferencedModel):
     trigger_breached_at = models.DateTimeField(null=True, blank=True)
     owner = models.ForeignKey(Account, on_delete=models.PROTECT, related_name="+")
     position = models.CharField(max_length=200, blank=True)
+    # The latest review, and the complaints or enquiries that show the risk happening. Closing a risk keeps it
+    # on record (is_active False) with the reason; every change is in the audit trail.
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(blank=True)
+    closed_reason = models.CharField(max_length=300, blank=True)
+    enquiries = models.ManyToManyField("demand.Enquiry", blank=True, related_name="risks")
 
 
 class Library(models.Model):
