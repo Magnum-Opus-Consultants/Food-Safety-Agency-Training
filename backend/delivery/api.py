@@ -6,7 +6,7 @@ from ninja.files import UploadedFile
 
 from core import clock
 from core.api_support import Refusal, iso, ok, require, stamp
-from delivery import services
+from delivery import performance, services
 from delivery.models import PlanBlock, Session
 from delivery.rules import block_warnings, can_capture, confirm_blockers, register_state
 from identity.models import Account
@@ -27,10 +27,35 @@ def _own_session_or_refuse(request, session):
                       "Facilitators capture registers for their own sessions only.", status=403)
 
 
-def session_dict(s: Session, today):
+def initials(name: str) -> str:
+    """University of Johannesburg → UJ; Tshwane University of Technology → TUT."""
+    return "".join(w[0] for w in name.split() if w[:1].isupper() and w.lower() not in ("of", "the", "and"))
+
+
+def groups_by_block(block_ids) -> dict[int, list[dict]]:
+    """Who the learners on each intake are with: the university or company, and how many. So a session can be
+    picked out by the group it is for, not only by its reference."""
+    from learners.models import Enrolment
+
+    out: dict[int, dict[str, dict]] = {}
+    for e in (Enrolment.objects.filter(is_active=True, stage_index__gte=1, plan_block_id__in=set(block_ids))
+              .select_related("learner__organisation")):
+        org = e.learner.organisation
+        name = org.name if org else "Individuals"
+        g = out.setdefault(e.plan_block_id, {}).setdefault(name, {
+            "name": name, "short": initials(name) if org and org.relationship == "University" else "",
+            "kind": org.relationship if org else "Individual", "learners": 0})
+        g["learners"] += 1
+    return {k: sorted(v.values(), key=lambda g: -g["learners"]) for k, v in out.items()}
+
+
+def session_dict(s: Session, today, groups: dict | None = None):
     b = s.plan_block
     state, tone = register_state(s, today)
+    if groups is None:
+        groups = groups_by_block([b.pk])
     return {
+        "groups": groups.get(b.pk, []),
         "ref": s.reference, "block": b.reference, "course": b.course.title, "venue": b.venue.name,
         "facilitator": b.facilitator.display_name, "facilitatorRef": b.facilitator.reference,
         "start": iso(s.first_day), "end": iso(s.last_day), "mode": b.delivery_mode,
@@ -51,7 +76,9 @@ def sessions(request):
     own = request.user.scope("delivery") == "own"
     if own:
         qs = qs.filter(plan_block__facilitator=request.user)
-    rows = [session_dict(s, today) for s in qs]
+    qs = list(qs)
+    groups = groups_by_block({s.plan_block_id for s in qs})
+    rows = [session_dict(s, today, groups) for s in qs]
     outstanding = sum(1 for r in rows if r["registerState"] == "Outstanding")
     return ok({
         "items": rows,
@@ -216,10 +243,36 @@ def facilitators(request):
             position, tone = "Expires soon — renew within ninety days", "warn"
         else:
             position, tone = "In order", "ok"
+        work = performance.indicators(a, today)
         rows.append({"ref": a.reference, "name": a.display_name, "registration": reg.registration_type,
                      "body": reg.body.name, "expires": iso(reg.expires_on), "blocks": blocks,
-                     "position": position, "tone": tone})
-    return ok(rows, source="Facilitator registrations · training plan")
+                     "position": position, "tone": tone, "regions": a.regions, "work": work})
+    return ok(rows, source="Facilitator registrations · training plan · registers and results")
+
+
+@router.get("/facilitators/cover")
+def facilitator_cover(request):
+    """Per region: who covers it, the intakes coming up there, and single or missing cover."""
+    require(request, "delivery")
+    from delivery.regions import REGIONS, cover
+
+    return ok({"regions": cover(), "all": REGIONS,
+               "canAssign": request.user.can("delivery", write=True) and request.user.scope("delivery") != "own"},
+              source="Facilitator regions · training plan")
+
+
+class RegionsIn(Schema):
+    regions: list[str] = []
+
+
+@router.put("/facilitators/{ref}/regions")
+def facilitator_regions(request, ref: str, body: RegionsIn):
+    require(request, "delivery", write=True)
+    from delivery.regions import set_regions
+
+    a = _account_or_404(ref)
+    audit = set_regions(request.user, a, body.regions, screen=_screen(request, "facilitators"))
+    return ok({"ref": a.reference, "regions": a.regions}, audit=audit)
 
 
 # --- planning intakes: add, change, cancel --------------------------------------------------
@@ -231,12 +284,14 @@ def plan_options(request):
     from courses.models import Course
     from delivery.models import DELIVERY_MODES
     from delivery.planning import CADENCES, facilitator_options
+    from delivery.regions import region_of
 
     return ok({
         "courses": [{"code": c.code, "title": c.title, "days": c.duration_days, "mode": c.delivery_mode}
                     for c in Course.objects.filter(is_active=True).order_by("title")],
-        "facilitators": [{"ref": a.reference, "name": a.display_name, "role": a.get_hub_role_display()} for a in facilitator_options()],
-        "venues": [{"id": v.pk, "name": v.name} for v in Venue.objects.filter(is_active=True).order_by("name")],
+        "facilitators": [{"ref": a.reference, "name": a.display_name, "role": a.get_hub_role_display(), "regions": a.regions}
+                         for a in facilitator_options()],
+        "venues": [{"id": v.pk, "name": v.name, "region": region_of(v)} for v in Venue.objects.filter(is_active=True).order_by("name")],
         "modes": DELIVERY_MODES, "cadences": CADENCES,
         "canPlan": request.user.can("delivery", write=True) and request.user.scope("delivery") != "own",
     })
@@ -366,7 +421,8 @@ def facilitator_detail(request, ref: str):
               .select_related("course").order_by("start_date"))
     return ok({
         "ref": a.reference, "name": a.display_name, "role": a.get_hub_role_display(), "state": a.state,
-        "suspendedReason": a.suspended_reason, "registrations": regs,
+        "suspendedReason": a.suspended_reason, "registrations": regs, "regions": a.regions,
+        "work": performance.indicators(a, today),
         "intakes": [{"ref": b.reference, "course": b.course.title, "start": iso(b.start_date), "end": iso(b.end_date), "state": b.state}
                     for b in blocks],
     })

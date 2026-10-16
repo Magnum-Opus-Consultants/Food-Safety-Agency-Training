@@ -14,7 +14,7 @@ type Home = {
 export default function TrainingHome() {
   const q = useRegister<Home>("/training/home");
   if (q.error) return <LoadError error={q.error} />;
-  if (!q.data) return <Loading what="department picture" />;
+  if (!q.data) return <Loading what="training home" />;
   const { hero, week } = q.data.data;
   // Only what needs doing: a row with nothing outstanding is not shown.
   const attention = q.data.data.attention.filter((a) => a.n > 0);

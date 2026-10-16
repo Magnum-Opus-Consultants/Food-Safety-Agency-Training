@@ -90,6 +90,9 @@ def me_dict(a: Account):
     d["canMoveClock"] = settings.DEMO_MODE and a.hub_role in ("TrainingManager", "SystemAdministrator")
     d["canSeeAudit"] = a.can_see_audit
     d["canSeeDesk"] = a.can_see_desk
+    from identity.users import can_manage
+
+    d["canManageUsers"] = can_manage(a)
     return d
 
 
@@ -131,15 +134,118 @@ def move_clock(request, body: ClockMove):
     return ok({"today": after.isoformat(), "moved": clock.is_moved()}, audit=audit)
 
 
+def _users_allowed(request):
+    from identity.users import can_manage
+
+    if not (can_manage(request.user) or request.user.can("admin")):
+        raise Refusal("forbidden", ["User management is for the head of department, the directors and the system administrator."],
+                      "You do not have access to this action.", status=403)
+
+
 @router.get("/users")
 def users(request):
-    require(request, "admin")
-    accounts = Account.objects.filter(is_active=True).select_related("reports_to").prefetch_related("registrations__body", "segments__segment")
+    _users_allowed(request)
+    accounts = (Account.objects.filter(is_active=True).select_related("reports_to")
+                .prefetch_related("registrations__body", "segments__segment").order_by("display_name"))
     rows = []
     for a in accounts:
         d = account_dict(a)
         d["segments"] = ", ".join(sorted(f"{s.segment.name}{' (own)' if s.scope == 'own' else ''}"
-                                         f"{'' if s.access == 'write' else ' · read'}" for s in a.segments.all())) or "—"
-        d["serviceAccount"] = a.is_service_account
+                                         f"{'' if s.access == 'write' else ' · read'}" for s in a.segments.all())) or (
+            "Reads everything by role" if a.hub_role in ("Director",) else "—")
+        # User management shows the account's own status only: can this person sign in or not. A registration
+        # coming up for renewal is the Facilitators page's business, not this one's.
+        suspended = a.is_suspended
+        d.update(state="Suspended" if suspended else "Active", tone="bad" if suspended else "ok")
+        if suspended and not a.suspended_reason and a.registration_standing() == "Lapsed":
+            d["suspendedReason"] = "Registration lapsed"
+        d.update(serviceAccount=a.is_service_account, username=a.username, email=a.email, isMe=a.pk == request.user.pk,
+                 reportsToRef=a.reports_to.reference if a.reports_to_id else "", suspendedReason=d.get("suspendedReason") or a.suspended_reason,
+                 grants={s.segment_id: [s.access, s.scope] for s in a.segments.all()})
         rows.append(d)
     return ok(rows, source="Accounts, segment grants and facilitator registrations")
+
+
+@router.get("/users/options")
+def user_options(request):
+    _users_allowed(request)
+    from identity.models import ROLE_LABEL, Segment
+    from identity.users import GIVES_RESTRICTED, ROLE_DEFAULTS, STAFF_ROLES
+
+    roles = [r for r in STAFF_ROLES if r not in GIVES_RESTRICTED or request.user.hub_role in GIVES_RESTRICTED[r]]
+    return ok({
+        "roles": [{"code": r, "label": ROLE_LABEL[r], "defaults": {k: list(v) for k, v in ROLE_DEFAULTS[r].items()}} for r in roles],
+        "segments": [{"code": s.code, "name": s.name} for s in Segment.objects.order_by("name")
+                     if s.code != "admin" or request.user.hub_role == "SystemAdministrator"],
+        "people": [{"ref": a.reference, "name": a.display_name} for a in Account.objects.filter(is_active=True, is_service_account=False)
+                   .order_by("display_name")],
+    })
+
+
+class NewUser(Schema):
+    name: str = ""
+    email: str = ""
+    position: str = ""
+    role: str = ""
+    reportsTo: str = ""
+
+
+def _target(ref):
+    a = Account.objects.filter(reference=ref, is_active=True).first()
+    if a is None:
+        raise Refusal("not_found", [f"No user {ref}."], "Not found.", status=404)
+    return a
+
+
+@router.post("/users")
+def add_user(request, body: NewUser):
+    from identity.users import create_user
+
+    account, password, audit = create_user(request.user, name=body.name, email=body.email, position=body.position, role=body.role,
+                                           reports_to_ref=body.reportsTo, screen=request.headers.get("X-FSA-Screen", "users"))
+    return ok({"ref": account.reference, "username": account.username, "password": password}, audit=audit)
+
+
+class UserEdit(Schema):
+    position: str | None = None
+    email: str | None = None
+    role: str | None = None
+    reportsTo: str | None = None
+    grants: dict[str, list[str]] | None = None
+
+
+@router.patch("/users/{ref}")
+def edit_user(request, ref: str, body: UserEdit):
+    from identity.users import update_user
+
+    account, audit = update_user(request.user, _target(ref), position=body.position, email=body.email, role=body.role,
+                                 reports_to_ref=body.reportsTo, grants=body.grants, screen=request.headers.get("X-FSA-Screen", "users"))
+    return ok({"ref": account.reference}, audit=audit)
+
+
+class Suspension(Schema):
+    reason: str = ""
+
+
+@router.post("/users/{ref}/suspend")
+def suspend_user(request, ref: str, body: Suspension):
+    from identity.users import suspend
+
+    audit = suspend(request.user, _target(ref), body.reason, screen=request.headers.get("X-FSA-Screen", "users"))
+    return ok({"ref": ref}, audit=audit)
+
+
+@router.post("/users/{ref}/reinstate")
+def reinstate_user(request, ref: str):
+    from identity.users import reinstate
+
+    audit = reinstate(request.user, _target(ref), screen=request.headers.get("X-FSA-Screen", "users"))
+    return ok({"ref": ref}, audit=audit)
+
+
+@router.post("/users/{ref}/password")
+def reset_user_password(request, ref: str):
+    from identity.users import reset_password
+
+    password, audit = reset_password(request.user, _target(ref), screen=request.headers.get("X-FSA-Screen", "users"))
+    return ok({"ref": ref, "password": password}, audit=audit)

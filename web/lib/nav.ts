@@ -14,19 +14,20 @@ export type NavItem = {
   /** Shown indented under the item above it: a view of the same register. */
   sub?: boolean;
   /** Shown only to accounts with this permission from /me, on top of the segment. */
-  needs?: "canSeeDesk";
+  needs?: "canSeeDesk" | "canManageUsers";
 };
 
 export const NAV: { group: string; items: NavItem[] }[] = [
   { group: "Overview", items: [
     { href: "/training-home", icon: "fas fa-home", label: "Training home", screen: "home", segment: "overview", built: true },
     { href: "/desk", icon: "fas fa-user-tie", label: "Head of department desk", screen: "desk", segment: "overview", badge: "DeskEscalated", built: true, needs: "canSeeDesk" },
-    { href: "/management-dashboard", icon: "fas fa-chart-line", label: "Management dashboard", screen: "dashboard", segment: "reporting", built: false },
+    { href: "/management-dashboard", icon: "fas fa-chart-line", label: "Management dashboard", screen: "dashboard", segment: "reporting", built: true },
     { href: "/monthly-report", icon: "fas fa-file-alt", label: "Monthly management report", screen: "report", segment: "reporting", built: false },
   ] },
   { group: "Clients & sales", items: [
     { href: "/enquiries", icon: "fas fa-inbox", label: "Enquiry queue", screen: "enquiries", segment: "demand", badge: "StaleEnquiries", built: true },
     { href: "/quotes", icon: "fas fa-file-invoice-dollar", label: "Quotations", screen: "quotes", segment: "demand", built: true },
+    { href: "/campaigns", icon: "fas fa-bullhorn", label: "Campaigns", screen: "campaigns", segment: "demand", built: true },
   ] },
   { group: "Courses", items: [
     { href: "/catalogue", icon: "fas fa-book-open", label: "Course catalogue", screen: "catalogue", segment: "courses", built: true },
@@ -43,6 +44,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
     { href: "/enrolments", icon: "fas fa-user-plus", label: "Enrolments", screen: "enrolments", segment: "learners", badge: "GateIncomplete", built: true },
     { href: "/results", icon: "fas fa-tasks", label: "Results & moderation", screen: "results", segment: "results", badge: "AwaitingModeration", built: true },
     { href: "/certificates", icon: "fas fa-certificate", label: "Certification", screen: "certificates", segment: "certification", badge: "AwaitingCertificate", built: true },
+    { href: "/feedback", icon: "fas fa-comment-dots", label: "Course feedback", screen: "feedback", segment: "learners", built: true },
   ] },
   { group: "Assurance", items: [
     { href: "/accreditation", icon: "fas fa-award", label: "Accreditation register", screen: "accreditation", segment: "assurance", built: true },
@@ -51,7 +53,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
     { href: "/documents", icon: "fas fa-folder-open", label: "Training depository", screen: "documents", segment: "depository", badge: "DepositoryOutstanding", built: true },
   ] },
   { group: "Administration", items: [
-    { href: "/users", icon: "fas fa-user-shield", label: "User management", screen: "users", segment: "admin", built: true },
+    { href: "/users", icon: "fas fa-user-shield", label: "User management", screen: "users", segment: "overview", built: true, needs: "canManageUsers" },
     { href: "/integrations", icon: "fas fa-plug", label: "Integrations", screen: "integrations", segment: "overview", built: false },
   ] },
   { group: "Handoff", items: [

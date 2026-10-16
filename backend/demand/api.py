@@ -6,7 +6,7 @@ from ninja import Router, Schema
 from core import clock
 from core.api_support import Refusal, iso, ok, require, stamp
 from courses.models import Course
-from demand import quotes, services
+from demand import campaigns, quotes, services
 from demand.models import ENQ_STAGES, ENQ_TOPICS, TOPIC_LABEL, Enquiry, Organisation, Quotation
 from oversight.rules import QUOTE_APPROVAL_CENTS, rand
 
@@ -53,6 +53,8 @@ def enquiry_dict(e: Enquiry):
         "quotations": [_card_quote(e, q) for q in e.quotations.all() if q.is_active],
         "kind": e.kind,
         "enquiringFor": e.enquiring_for,
+        "source": e.source, "campaignRef": e.campaign.reference if e.campaign_id else "",
+        "sourceLabel": campaigns.source_label(e) if e.source else "",
         "channel": e.channel,
         "receivedAt": iso(e.received_at),
         "workingDaysOpen": days,
@@ -94,7 +96,7 @@ def enquiries(request, period: str = "week", date: str | None = None, q: str | N
         raise Refusal("invalid", [f"{date} is not a date."], "Choose a date.", status=422)
     monday, sunday, previous, following = _period(period, chosen)
     current = monday <= today <= sunday
-    base = Enquiry.objects.filter(is_active=True).select_related("contact__organisation", "course", "assigned_to").prefetch_related("enrolments", "quotations__course", "quotations__enrolments")
+    base = Enquiry.objects.filter(is_active=True).select_related("contact__organisation", "course", "assigned_to", "campaign").prefetch_related("enrolments", "quotations__course", "quotations__enrolments")
     text = (q or "").strip()
     if text:
         rows = list(base.filter(Q(reference__icontains=text) | Q(contact__names__icontains=text)
@@ -146,7 +148,7 @@ class StageMove(Schema):
 @router.patch("/enquiries/{ref}/stage")
 def move(request, ref: str, body: StageMove):
     require(request, "demand", write=True)
-    enquiry = Enquiry.objects.select_related("contact__organisation", "course", "assigned_to").filter(reference=ref).first()
+    enquiry = Enquiry.objects.select_related("contact__organisation", "course", "assigned_to", "campaign").filter(reference=ref).first()
     if not enquiry:
         raise Refusal("not_found", [f"No enquiry {ref}."], "Not found.", status=404)
     audit = services.move_enquiry(request.user, enquiry, body.stageIndex, screen=request.headers.get("X-FSA-Screen", "enquiries"))
@@ -156,7 +158,7 @@ def move(request, ref: str, body: StageMove):
 @router.post("/enquiries/{ref}/resolve")
 def resolve(request, ref: str):
     require(request, "demand", write=True)
-    enquiry = Enquiry.objects.select_related("contact__organisation", "course", "assigned_to").filter(reference=ref).first()
+    enquiry = Enquiry.objects.select_related("contact__organisation", "course", "assigned_to", "campaign").filter(reference=ref).first()
     if not enquiry:
         raise Refusal("not_found", [f"No enquiry {ref}."], "Not found.", status=404)
     audit = services.resolve(request.user, enquiry, screen=request.headers.get("X-FSA-Screen", "desk"))
@@ -175,6 +177,8 @@ class NewEnquiry(Schema):
     enquiringFor: str = ""
     courseCode: str = ""
     interest: str = ""
+    source: str = ""
+    campaignRef: str = ""
 
 
 @router.post("/enquiries")
@@ -195,6 +199,16 @@ def create(request, body: NewEnquiry):
     course = Course.objects.filter(code=body.courseCode).first() if body.courseCode else None
     topics, topic_other, topic_reasons = services.check_topics(body.kind, body.topics, body.topicOther, required=True)
     reasons += topic_reasons
+    campaign = None
+    if body.kind == "Enquiry":
+        from demand.models import SOURCE_LABEL, Campaign
+
+        if body.source not in SOURCE_LABEL:
+            reasons.append("Ask how they heard about FSA (choose “Did not say” if they did not).")
+        elif body.source == "Campaign":
+            campaign = Campaign.objects.filter(is_active=True, reference=body.campaignRef).first()
+            if campaign is None:
+                reasons.append("Choose the campaign that brought them.")
     if body.kind != "Enquiry" and not body.interest.strip():
         reasons.append(f"Describe the {body.kind.lower()}.")
     from core.phone import normalise
@@ -213,8 +227,8 @@ def create(request, body: NewEnquiry):
     enquiry, audit = services.log_enquiry(request.user, body.names.strip(), org, body.channel, body.kind, course,
                                           body.interest.strip(), screen=request.headers.get("X-FSA-Screen", "enquiries"),
                                           email=body.email.strip(), phone=phone, topics=topics, topic_other=topic_other,
-                                          enquiring_for=body.enquiringFor or "Individual")
-    enquiry = Enquiry.objects.select_related("contact__organisation", "course", "assigned_to").get(pk=enquiry.pk)
+                                          enquiring_for=body.enquiringFor or "Individual", source=body.source, campaign=campaign)
+    enquiry = Enquiry.objects.select_related("contact__organisation", "course", "assigned_to", "campaign").get(pk=enquiry.pk)
     return ok(enquiry_dict(enquiry), audit=audit)
 
 
@@ -271,7 +285,7 @@ def add_delegates(request, ref: str, body: Delegates):
 
 
 def _enquiry(ref):
-    e = (Enquiry.objects.select_related("contact__organisation", "course", "assigned_to")
+    e = (Enquiry.objects.select_related("contact__organisation", "course", "assigned_to", "campaign")
          .prefetch_related("enrolments", "quotations__course", "quotations__enrolments").filter(reference=ref, is_active=True).first())
     if not e:
         raise Refusal("not_found", [f"No enquiry {ref}."], "Not found.", status=404)
@@ -321,6 +335,8 @@ class EnquiryEdit(Schema):
     ownerRef: str | None = None
     notes: str | None = None
     enquiringFor: str | None = None
+    source: str | None = None
+    campaignRef: str | None = None
 
 
 @router.patch("/enquiries/{ref}")
@@ -587,3 +603,83 @@ def edit_quotation(request, ref: str, body: QuoteEdit):
                                      learners=body.learners, value=body.value, approve=body.approve,
                                      screen=request.headers.get("X-FSA-Screen", "quotes"))
     return ok({"ref": quote.reference, "state": quote.state}, audit=audit)
+
+
+# --- marketing campaigns -----------------------------------------------------------------------------
+
+def campaign_dict(c, on=None):
+    return {"ref": c.reference, "name": c.name, "channel": c.channel, "starts": iso(c.starts_on), "ends": iso(c.ends_on),
+            "courses": [{"code": x.code, "title": x.title} for x in c.courses.all().order_by("title")],
+            "cost": campaigns.rand(c.cost_cents), "costRand": c.cost_cents / 100, "objective": c.objective,
+            "recommendations": c.recommendations, "results": campaigns.results(c, on)}
+
+
+@router.get("/campaigns")
+def campaign_register(request):
+    from demand.models import CAMPAIGN_CHANNELS, Campaign
+
+    require(request, "demand")
+    today = clock.today()
+    rows = [campaign_dict(c, today) for c in Campaign.objects.filter(is_active=True).prefetch_related("courses")]
+    return ok({"items": rows, "channels": CAMPAIGN_CHANNELS, "canEdit": request.user.can("demand", write=True),
+               "courses": [{"code": c.code, "title": c.title} for c in Course.objects.filter(is_active=True).order_by("title")]},
+              source="Campaign register · enquiries · quotations · enrolments")
+
+
+@router.get("/campaigns/options")
+def campaign_options(request):
+    """Campaigns an enquiry can name: running now, or ended in the last six months."""
+    from demand.models import SOURCES, Campaign
+
+    require(request, "demand")
+    today = clock.today()
+    rows = Campaign.objects.filter(is_active=True, starts_on__lte=today, ends_on__gte=today - dt.timedelta(days=183))
+    return ok({"sources": [{"value": v, "label": l} for v, l in SOURCES],
+               "campaigns": [{"ref": c.reference, "name": c.name, "channel": c.channel, "running": c.ends_on >= today} for c in rows]})
+
+
+class CampaignIn(Schema):
+    name: str = ""
+    channel: str = ""
+    starts: dt.date | None = None
+    ends: dt.date | None = None
+    courses: list[str] = []
+    cost: str = "0"
+    objective: str = ""
+
+
+class CampaignEdit(Schema):
+    name: str | None = None
+    channel: str | None = None
+    starts: dt.date | None = None
+    ends: dt.date | None = None
+    courses: list[str] | None = None
+    cost: str | None = None
+    objective: str | None = None
+    recommendations: str | None = None
+
+
+@router.post("/campaigns")
+def add_campaign(request, body: CampaignIn):
+    require(request, "demand", write=True)
+    courses = list(Course.objects.filter(code__in=body.courses))
+    c, audit = campaigns.create(request.user, name=body.name, channel=body.channel, starts_on=body.starts, ends_on=body.ends,
+                                courses=courses, cost=body.cost, objective=body.objective,
+                                screen=request.headers.get("X-FSA-Screen", "campaigns"))
+    return ok(campaign_dict(c), audit=audit)
+
+
+@router.patch("/campaigns/{ref}")
+def edit_campaign(request, ref: str, body: CampaignEdit):
+    from demand.models import Campaign
+
+    require(request, "demand", write=True)
+    c = Campaign.objects.filter(is_active=True, reference=ref).first()
+    if c is None:
+        raise Refusal("not_found", [f"No campaign {ref}."], "Not found.", status=404)
+    raw = body.dict(exclude_none=True)
+    changes = {{"starts": "starts_on", "ends": "ends_on"}.get(k, k): v for k, v in raw.items() if k != "courses"}
+    courses = list(Course.objects.filter(code__in=body.courses)) if body.courses is not None else None
+    audit = campaigns.update(request.user, c, changes, courses, screen=request.headers.get("X-FSA-Screen", "campaigns"))
+    return ok(campaign_dict(c), audit=audit)
+

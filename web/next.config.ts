@@ -13,10 +13,35 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        source: "/:path*",
+        // Every page refuses to be framed, except a certificate PDF or a marked assessment, which the hub shows inside itself.
+        source: "/((?!api/fsa/certificates/|api/fsa/results/|api/fsa/placements/).*)",
         headers: [
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "same-origin" },
+        ],
+      },
+      {
+        source: "/api/fsa/certificates/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Referrer-Policy", value: "same-origin" },
+        ],
+      },
+      {
+        source: "/api/fsa/placements/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Referrer-Policy", value: "same-origin" },
+        ],
+      },
+      {
+        source: "/api/fsa/results/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
           { key: "Referrer-Policy", value: "same-origin" },
         ],
       },

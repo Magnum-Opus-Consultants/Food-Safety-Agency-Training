@@ -9,6 +9,7 @@ import { useState } from "react";
 import { Blocked, Status } from "@/components/ui";
 import { PhoneInput } from "@/components/PhoneInput";
 import { TopicPicker } from "@/components/TopicPicker";
+import { SourcePicker } from "@/components/SourcePicker";
 import type { AuditEntry, Tone } from "@/lib/api";
 import { useAction, useRegister } from "@/lib/hooks";
 import { courseOptions, SearchSelect } from "@/components/SearchSelect";
@@ -18,6 +19,7 @@ type Detail = {
   courseCode: string; interest: string; ownerRef: string; owner: string | null; notes: string;
   topics: string[]; topicOther: string; clockText: string; updatedAt: string | null; updatedBy: string | null;
   receivedAt: string; workingDaysOpen: number; stage: string; stale: boolean; tone: Tone; enrolment: string | null;
+  source: string; campaignRef: string; sourceLabel: string;
   canEdit: boolean; courseLocked: boolean; kindLocked: boolean; enquiringFor: string; forLocked: boolean;
   owners: { ref: string; name: string }[]; history: AuditEntry[]; historyVisible: boolean;
 };
@@ -25,12 +27,13 @@ type Detail = {
 const CHANNELS: [string, string][] = [["Phone", "Phone"], ["Email", "Email"], ["WhatsApp", "WhatsApp"]];
 
 type Fields = { names: string; organisation: string; email: string; phone: string; channel: string; kind: string; enquiringFor: string;
-  courseCode: string; interest: string; ownerRef: string; notes: string; topics: string[]; topicOther: string };
+  courseCode: string; interest: string; ownerRef: string; notes: string; topics: string[]; topicOther: string;
+  source: string; campaignRef: string };
 
 function fieldsOf(d: Detail): Fields {
   return { names: d.name, organisation: d.org, email: d.email, phone: d.phone, channel: d.channel, kind: d.kind, enquiringFor: d.enquiringFor,
     courseCode: d.courseCode, interest: d.interest, ownerRef: d.ownerRef, notes: d.notes,
-    topics: d.topics, topicOther: d.topicOther };
+    topics: d.topics, topicOther: d.topicOther, source: d.source, campaignRef: d.campaignRef };
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? "") === JSON.stringify(b ?? "");
@@ -64,7 +67,8 @@ function Form({ d, courses, save, onClose, onSaved }: {
   const ro = !d.canEdit;
   // Required fields, checked as you type so Save is only offered when the enquiry can be saved.
   // The API checks the same rules again.
-  const errors: Partial<Record<"names" | "email" | "topics" | "topicOther" | "interest" | "organisation", string>> = {};
+  const errors: Partial<Record<"names" | "email" | "topics" | "topicOther" | "interest" | "organisation" | "source" | "campaign", string>> = {};
+  if (f.kind === "Enquiry" && f.source === "Campaign" && !f.campaignRef) errors.campaign = "Choose the campaign that brought them.";
   if (f.kind === "Enquiry" && f.enquiringFor === "Company" && !f.organisation.trim()) errors.organisation = "Give the company's name.";
   if (!f.names.trim()) errors.names = "Enter the enquirer's name.";
   if (f.email.trim() && !f.email.includes("@")) errors.email = "Enter a valid email address, or leave it blank.";
@@ -79,6 +83,7 @@ function Form({ d, courses, save, onClose, onSaved }: {
     changed.forEach((k) => { body[k] = f[k]; });
     // topics and their "Other" text travel together, so the API can check them as a pair
     if (changed.includes("topics") || changed.includes("topicOther")) { body.topics = f.topics; body.topicOther = f.topicOther; }
+    if (changed.includes("source") || changed.includes("campaignRef")) { body.source = f.source; body.campaignRef = f.campaignRef; }
     save.mutate(body as Partial<Fields>, { onSuccess: (r) => onSaved(r.meta.audit?.what ?? "") });
   }
 
@@ -143,6 +148,10 @@ function Form({ d, courses, save, onClose, onSaved }: {
           <div className="field"><label htmlFor="ee-interest">Course not in the catalogue (optional)</label>
             <input id="ee-interest" value={f.interest} readOnly={ro} placeholder="Which training they meant"
                    onChange={(e) => set("interest", e.target.value)} /></div>
+        ) : null}
+        {f.kind === "Enquiry" ? (
+          <SourcePicker idPrefix="ee" source={f.source} campaignRef={f.campaignRef} readOnly={ro} errors={{ campaign: errors.campaign }}
+                        onChange={(source, campaignRef) => setF((x) => ({ ...x, source, campaignRef }))} />
         ) : null}
         <div className="field"><label htmlFor="ee-owner">Owner</label>
           <select id="ee-owner" value={f.ownerRef} disabled={ro} onChange={(e) => set("ownerRef", e.target.value)}>

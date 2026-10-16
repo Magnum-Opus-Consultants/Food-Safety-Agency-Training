@@ -18,6 +18,7 @@ from core import clock
 from core.api_support import Refusal
 
 ENTITY_TYPE = "learners.enrolment.grade10"
+TEST_TYPE = "learners.enrolment.prereqtest"  # the marked prerequisite test, filed with the result captured from it
 KINDS = [  # (magic bytes, extension, media type)
     (b"%PDF-", "pdf", "application/pdf"),
     (b"\xff\xd8\xff", "jpg", "image/jpeg"),
@@ -28,6 +29,63 @@ MEDIA_TYPE = {ext: media for _, ext, media in KINDS}
 
 def current(enrolment) -> Document | None:
     return Document.objects.filter(is_active=True, entity_type=ENTITY_TYPE, entity_ref=enrolment.reference).first()
+
+
+def current_test(enrolment) -> Document | None:
+    return Document.objects.filter(is_active=True, entity_type=TEST_TYPE, entity_ref=enrolment.reference).first()
+
+
+@transaction.atomic
+def capture_test(actor, enrolment, result, filename: str, content: bytes, screen="enrolments"):
+    """A new prerequisite test result, with the marked test it was read from. Both, together."""
+    from decimal import Decimal, InvalidOperation
+
+    _gate_open(enrolment)
+    reasons = []
+    try:
+        value = Decimal(str(result))
+        if not 0 <= value <= 100:
+            raise InvalidOperation
+    except (InvalidOperation, ValueError):
+        value = None
+        reasons.append("Give the result as a percentage from 0 to 100.")
+    if not content:
+        reasons.append("Upload the marked test the result comes from.")
+    elif len(content) > settings.FSA_UPLOAD_MAX_BYTES:
+        reasons.append("The file is larger than 5 MB.")
+    elif _sniff(content[:8]) is None:
+        reasons.append("Upload the test as a PDF, or a photo or scan as JPG or PNG.")
+    if reasons:
+        raise Refusal("invalid", reasons, "The result cannot be saved yet.", status=422)
+    ext = _sniff(content[:8])
+    digest = hashlib.sha256(content).hexdigest()
+    key = f"evidence/prerequisite-tests/{enrolment.reference}-{digest[:12]}.{ext}"
+    target = Path(settings.FSA_FILE_ROOT) / key
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    replaced = current_test(enrolment)
+    if replaced:  # the earlier test stays in the archive with the earlier result in the audit trail
+        replaced.is_active, replaced.state, replaced.modified_by = False, "Archived", actor
+        replaced.save()
+    name = Path(filename or f"test.{ext}").name[:120]
+    doc = Document.objects.create(
+        library=Library.objects.get(code="evidence"), title=f"Prerequisite test — {enrolment.learner.names} · {name}",
+        entity_type=TEST_TYPE, entity_ref=enrolment.reference, storage_key=key, sha256=digest, state="Held",
+        created_by=actor, modified_by=actor,
+    )
+    from learners.models import PrerequisiteAttempt
+
+    before = str(enrolment.prerequisite_result) if enrolment.prerequisite_result is not None else None
+    if before is not None and not enrolment.prerequisite_attempts.exists():
+        # A result captured before attempts were kept becomes the first attempt, without a file.
+        PrerequisiteAttempt.objects.create(enrolment=enrolment, result=enrolment.prerequisite_result, created_by=enrolment.modified_by)
+    attempt = PrerequisiteAttempt.objects.create(enrolment=enrolment, result=value, document=doc, created_by=actor, modified_by=actor)
+    enrolment.prerequisite_result = value
+    enrolment.modified_by = actor
+    enrolment.save()
+    n = enrolment.prerequisite_attempts.filter(id__lte=attempt.id).count()
+    return record(actor, f"{enrolment.reference} prerequisite test attempt {n}: {value.normalize():f}% captured — {name} ({doc.reference})",
+                  enrolment, screen=screen, before={"prerequisiteResult": before}, after={"prerequisiteResult": str(value), "document": doc.reference})
 
 
 def path_of(doc: Document) -> Path:

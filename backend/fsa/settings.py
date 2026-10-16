@@ -138,5 +138,6 @@ if len(sys.argv) > 1 and sys.argv[1] == "test":
     PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
     # The acceptance tests check the prototype's scenarios, which are dated around 2026-09-09.
     DEMO_TODAY = "2026-09-09"
+    DEMO_LOGINS_FILE_WRITES = False  # tests never touch the testers' demo-logins.txt
     import tempfile
     FSA_FILE_ROOT = Path(tempfile.mkdtemp(prefix="fsa-test-files-"))

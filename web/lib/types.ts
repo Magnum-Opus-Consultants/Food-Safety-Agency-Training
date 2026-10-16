@@ -4,6 +4,7 @@ export type SessionRow = {
   ref: string; block: string; course: string; venue: string; facilitator: string; start: string; end: string; mode: string;
   seats: number; capacity: number; registerState: string; tone: Tone; lockedAt: string | null; lockedBy: string | null;
   day: string | null; sequence: number | null; of: number | null; times: string;
+  groups: { name: string; short: string; kind: string; learners: number }[];
 };
 
 export type Warning = { kind: string; tone: Tone; message: string };

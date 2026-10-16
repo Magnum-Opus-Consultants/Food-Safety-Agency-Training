@@ -526,3 +526,99 @@ table.plain-table td:first-child { white-space: nowrap; }
 .day-picks { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .day-picks button { font: 600 .8rem var(--font-sans); padding: 7px 12px; border: 1px solid var(--aps-line); border-radius: 6px; background: #fff; color: var(--aps-text); cursor: pointer; }
 .day-picks button.on { background: var(--aps-teal); border-color: var(--aps-teal); color: #fff; }
+table.plain-table tr.step-now > td { background: var(--aps-teal-50); }
+table.plain-table input[type="date"] { font: .85rem var(--font-sans); padding: 4px 6px; border: 1px solid var(--aps-line); border-radius: 5px; }
+.cert-frame { width: 100%; height: 560px; border: 1px solid var(--aps-line); border-radius: 8px; background: #fff; }
+
+/* A record's facts in an opened row: label left, value right, one line each. */
+.facts { display: grid; gap: 6px; margin: 0; font-size: .875rem; }
+.facts > div { display: grid; grid-template-columns: 150px 1fr; gap: 12px; }
+.facts dt { color: var(--aps-faint); font-weight: 600; }
+.facts dd { margin: 0; color: var(--aps-ink); }
+@media (max-width: 600px) { .facts > div { grid-template-columns: 1fr; gap: 2px; } }
+
+/* Prerequisite test attempts, first to latest; the latest is the one that counts. */
+.attempts { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; font-size: .85rem; }
+.attempts li { padding-left: 10px; border-left: 2px solid var(--aps-line); color: var(--aps-faint); }
+.attempts li.latest { border-left-color: var(--aps-teal); color: var(--aps-ink); }
+
+/* The page heading is not shown on screen (it read as a watermark over the photo); it stays for screen
+   readers and the browser tab, so every page still has its title. */
+.page-head { position: absolute !important; width: 1px; height: 1px; padding: 0 !important; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* Management dashboard: simple bar charts, drawn with CSS. */
+.dash-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 24px; align-items: start; }
+.dash-chart { display: flex; flex-direction: column; gap: 10px; }
+.dash-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: .8rem; color: var(--aps-text); }
+.dash-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.dash-bars { display: grid; gap: 6px; height: 200px; align-items: end; }
+.dash-col { display: flex; flex-direction: column; height: 100%; min-width: 0; }
+.dash-col.peak .dash-x { color: var(--aps-teal-dark); font-weight: 700; }
+.dash-stack { flex: 1; display: flex; align-items: flex-end; justify-content: center; gap: 2px; border-bottom: 1px solid var(--aps-line); }
+.dash-bar { flex: 1; max-width: 18px; min-height: 0; border-radius: 3px 3px 0 0; position: relative; }
+.dash-bar span { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: .65rem; color: var(--aps-text); }
+.dash-x { text-align: center; font-size: .7rem; color: var(--aps-faint); padding-top: 4px; white-space: nowrap; overflow: hidden; }
+.dash-funnel { display: grid; gap: 8px; }
+.dash-frow { display: grid; grid-template-columns: 150px 1fr 40px; gap: 10px; align-items: center; font-size: .85rem; }
+.dash-ftrack { background: var(--aps-zebra); border-radius: 4px; height: 14px; overflow: hidden; }
+.dash-fbar { height: 100%; background: var(--aps-teal); border-radius: 4px; }
+.dash-list { margin: 0; padding-left: 18px; font-size: .875rem; display: grid; gap: 4px; }
+.dash-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.dash-kpis > div { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+@media (max-width: 600px) { .dash-two { grid-template-columns: 1fr; } .dash-frow { grid-template-columns: 100px 1fr 32px; } }
+
+/* The learner's course evaluation: a single card, opened from a private link on any phone. */
+.fb-page { min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 32px 16px; background: var(--aps-zebra); }
+.fb-card { width: 100%; max-width: 560px; background: #fff; border-radius: 12px; box-shadow: var(--card-shadow); padding: 28px 24px; display: flex; flex-direction: column; gap: 14px; }
+.fb-logo { height: 52px; width: auto; align-self: center; }
+.fb-card h1 { margin: 0; font-size: 1.35rem; color: var(--aps-ink); }
+.fb-sub { margin: 0; color: var(--aps-text); font-size: .9rem; line-height: 1.5; }
+.fb-note, .fb-hint { margin: 0; font-size: .8rem; color: var(--aps-faint); }
+.fb-q { display: flex; flex-direction: column; gap: 8px; }
+.fb-label { font-weight: 600; font-size: .9rem; color: var(--aps-ink); }
+.fb-opt { font-weight: 400; color: var(--aps-faint); }
+.fb-scale { display: flex; gap: 8px; flex-wrap: wrap; }
+.fb-scale button { min-width: 48px; height: 44px; border: 1px solid var(--aps-field); border-radius: 8px; background: #fff; font: 600 1rem var(--font-sans); cursor: pointer; color: var(--aps-text); }
+.fb-scale button.on { background: var(--aps-teal); border-color: var(--aps-teal); color: #fff; }
+.fb-card textarea { width: 100%; font: .9rem var(--font-sans); padding: 10px 12px; border: 1px solid var(--aps-field); border-radius: 8px; resize: vertical; }
+.fb-send { height: 48px; border: 0; border-radius: 8px; background: var(--aps-teal); color: #fff; font: 600 1rem var(--font-sans); cursor: pointer; }
+.fb-send:disabled { opacity: .5; cursor: not-allowed; }
+.fb-problems { margin: 0; padding: 10px 14px 10px 30px; background: #fef2f2; color: #991b1b; border-radius: 8px; font-size: .85rem; }
+.fb-msg { margin: 0; text-align: center; color: var(--aps-text); }
+.fb-done { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.fb-done i { font-size: 2.4rem; color: var(--ok); }
+.fb-done p { margin: 0; color: var(--aps-text); }
+
+/* Management dashboard, second pass: padded cards, tables that scroll inside their card, breakdown rows. */
+.dash-card { padding: 20px 24px; }
+.stack-20 { display: flex; flex-direction: column; gap: 20px; }
+.dash-scroll { overflow-x: auto; }
+.dash-scroll table { min-width: 100%; }
+.dash-card .plain-table td.num, .dash-card .plain-table th.num { text-align: right; font-family: var(--font-mono, monospace); }
+.dash-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.dash-rule { border: 0; border-top: 1px solid var(--aps-line); margin: 0; }
+.dash-rows { display: grid; gap: 10px; }
+.dash-row { display: grid; grid-template-columns: minmax(140px, 220px) 1fr auto 64px; gap: 12px; align-items: center; font-size: .875rem; }
+.dash-row-2 { grid-template-columns: 1fr auto; }
+.dash-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--aps-ink); }
+.dash-track { height: 16px; background: var(--aps-zebra); border-radius: 4px; overflow: hidden; }
+.dash-fill { height: 100%; background: var(--aps-teal-50); border: 1px solid var(--aps-teal); border-radius: 4px; overflow: hidden; min-width: 2px; }
+.dash-fill-in { height: 100%; background: var(--aps-teal); }
+.dash-num { white-space: nowrap; color: var(--aps-text); font-size: .82rem; }
+.dash-kpi { padding: 14px 16px; border: 1px solid var(--aps-line); border-radius: 8px; background: #fff; }
+.dash-big { font-size: 1.6rem; font-weight: 700; color: var(--aps-teal-dark); line-height: 1.1; }
+@media (max-width: 700px) { .dash-row { grid-template-columns: 1fr 64px; } .dash-row .dash-track, .dash-row .dash-num { grid-column: 1 / -1; } .dash-card { padding: 16px; } }
+
+/* Course feedback: score tiles for an opened intake, and a learner table with its actions on the right. */
+.fb-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.fb-tile { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border: 1px solid var(--aps-line); border-radius: 8px; background: #fff;
+  border-left-width: 4px; }
+.fb-tile span { font-size: .78rem; color: var(--aps-text); }
+.fb-tile b { font-size: 1.4rem; color: var(--aps-ink); line-height: 1.2; }
+.fb-tile small { font-size: .72rem; color: var(--aps-faint); }
+.fb-tile.tone-ok { border-left-color: var(--ok); }
+.fb-tile.tone-warn { border-left-color: #C58A1B; }
+.fb-tile.tone-bad { border-left-color: var(--bad); }
+.fb-table { table-layout: fixed; width: 100%; }
+.fb-table td { vertical-align: middle; }

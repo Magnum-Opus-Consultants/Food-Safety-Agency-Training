@@ -11,8 +11,8 @@ import { useAction, useRegister } from "@/lib/hooks";
 
 type Options = {
   courses: { code: string; title: string; days: number; mode: string }[];
-  facilitators: { ref: string; name: string; role: string }[];
-  venues: { id: number; name: string }[];
+  facilitators: { ref: string; name: string; role: string; regions: string[] }[];
+  venues: { id: number; name: string; region: string | null }[];
   modes: string[]; cadences: string[]; canPlan: boolean;
 };
 export type Affected = { enrolment: string; learner: string; learnerRef: string; email: string; phone: string; company: string; companyContact: string };
@@ -69,6 +69,11 @@ export function IntakeForm({ initial, refCode, learners = 0, onDone, onCancel }:
   const moving = refCode && initial && learners > 0 &&
     (f.start !== initial.start || f.end !== initial.end || f.facilitatorRef !== initial.facilitatorRef
       || f.venueId !== initial.venueId || f.newVenue.trim() !== "");
+  // The venue's region, and a warning when the chosen facilitator does not cover it (travel is allowed).
+  const region = o.venues.find((v) => v.id === f.venueId)?.region ?? null;
+  const chosen = o.facilitators.find((a) => a.ref === f.facilitatorRef);
+  const outside = region && chosen && !chosen.regions.includes(region)
+    ? `${chosen.name} does not cover ${region}${chosen.regions.length ? ` (covers ${chosen.regions.join(", ")})` : ""}. Allowed, but confirm the travel.` : "";
   const p: Record<string, string> = {};
   if (!f.courseCode) p.course = "Choose the course.";
   if (!f.facilitatorRef) p.facilitator = "Choose the facilitator.";
@@ -109,11 +114,15 @@ export function IntakeForm({ initial, refCode, learners = 0, onDone, onCancel }:
         <div className="field"><label htmlFor="in-fac">Facilitator</label>
           <SearchSelect id="in-fac" value={f.facilitatorRef} invalid={!!e.facilitator} placeholder="Type to search facilitators…"
                         emptyText="No facilitator matches" onChange={(v) => set("facilitatorRef", v)}
-                        options={o.facilitators.map((a) => ({ value: a.ref, label: a.name, hint: a.role }))} /><Err k="facilitator" /></div>
+                        options={[...o.facilitators].sort((a, b) => Number(!!region && b.regions.includes(region)) - Number(!!region && a.regions.includes(region)))
+                          .map((a) => ({ value: a.ref, label: a.name,
+                            hint: region && a.regions.includes(region) ? `Covers ${region}` : a.regions.length ? a.regions.join(", ") : "No regions assigned" }))} />
+          <Err k="facilitator" />
+          {outside ? <span className="small tone-warn">{outside}</span> : null}</div>
         <div className="field"><label htmlFor="in-venue">Venue</label>
           <SearchSelect id="in-venue" value={f.venueId === null ? "" : String(f.venueId)} invalid={!!e.venue} placeholder="Type to search venues…"
                         emptyText="No venue matches" onChange={(v) => setF((x) => ({ ...x, venueId: v ? Number(v) : null, newVenue: "" }))}
-                        options={[...o.venues.map((v) => ({ value: String(v.id), label: v.name })), { value: String(NEW_VENUE), label: "+ A new venue" }]} />
+                        options={[...o.venues.map((v) => ({ value: String(v.id), label: v.name, hint: v.region ?? undefined })), { value: String(NEW_VENUE), label: "+ A new venue" }]} />
           {f.venueId === NEW_VENUE ? <input aria-label="New venue" placeholder="Name of the new venue" value={f.newVenue}
                                             className={cls("venue")} onChange={(x) => set("newVenue", x.target.value)} style={{ marginTop: 6 }} /> : null}
           <Err k="venue" /></div>

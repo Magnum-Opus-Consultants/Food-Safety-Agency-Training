@@ -25,6 +25,14 @@ def confirm_blockers(block, on: dt.date | None = None) -> list[str]:
             )
     if fac.state == "Suspended" and not reasons:
         reasons.append(f"{fac.display_name}’s account is suspended — {fac.suspended_reason}.")
+    # The course's own accreditation: delivery under a lapsed scope stops.
+    from assurance.workflow import delivery_blockers
+
+    reasons += delivery_blockers(block, on)
+    # A university placed on the intake may require a particular registration (UJ: HPCSA).
+    from assurance.placements import requirement_blockers
+
+    reasons += requirement_blockers(block, on)
     return reasons
 
 
@@ -55,6 +63,11 @@ def block_warnings(block, others, on: dt.date | None = None) -> list[dict]:
             "message": f"{block.facilitator.display_name}’s {reg.registration_type.lower()} expires on "
                        f"{reg.expires_on.isoformat()}, while this intake is running. Renew before delivery.",
         })
+    from delivery.regions import out_of_region
+
+    region = out_of_region(block)
+    if region:
+        out.append({"kind": "region", "tone": "warn", "message": region})
     for other in others:
         if (other.pk != block.pk and other.facilitator_id == block.facilitator_id and other.state != "Cancelled"
                 and other.start_date <= block.end_date and other.end_date >= block.start_date):

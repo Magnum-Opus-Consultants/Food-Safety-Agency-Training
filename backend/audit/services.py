@@ -13,7 +13,7 @@ def record(actor, what: str, obj=None, screen: str = "", before=None, after=None
         actor=actor if getattr(actor, "pk", None) else None,
         actor_name=getattr(actor, "display_name", "System"),
         actor_role=getattr(actor, "hub_role", "System"),
-        what=what,
+        what=what if len(what) <= 400 else what[:399] + "…",
         entity_type=obj._meta.label_lower if obj is not None else "",
         entity_ref=getattr(obj, "reference", "") if obj is not None else "",
         screen=screen,

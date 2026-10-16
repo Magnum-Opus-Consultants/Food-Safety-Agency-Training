@@ -9,14 +9,19 @@ import { SearchSelect } from "@/components/SearchSelect";
 import { ACCEPT } from "@/components/Prerequisites";
 import { api, ApiError, upload } from "@/lib/api";
 import type { Tone } from "@/lib/api";
-import { useRegister, useScreen, useUpload } from "@/lib/hooks";
+import { useAction, useRegister, useScreen, useUpload } from "@/lib/hooks";
 
-type Row = { ref: string; name: string; registration: string; body: string; expires: string; blocks: string[]; position: string; tone: Tone };
+type Work = { items: { key: string; label: string; tone: Tone; note: string }[]; position: string; tone: Tone };
+type Row = { ref: string; name: string; registration: string; body: string; expires: string; blocks: string[]; position: string; tone: Tone;
+  regions: string[]; work: Work };
+type Cover = { regions: { region: string; facilitators: { ref: string; name: string; able: boolean }[];
+  intakes: { ref: string; course: string; start: string; facilitator: string; fromOutside: boolean }[]; position: string; tone: Tone }[];
+  all: string[]; canAssign: boolean };
 type Options = { bodies: { code: string; name: string }[]; people: { ref: string; name: string; role: string; registered: boolean }[]; canRecord: boolean };
 type Reg = { id: number; registration: string; body: string; bodyCode: string; number: string; issued: string | null; expires: string;
   standing: string; recorded: string; recordedBy: string; certificate: { name: string; url: string } | null };
 type Detail = { ref: string; name: string; role: string; state: string; suspendedReason: string; registrations: Reg[];
-  intakes: { ref: string; course: string; start: string; end: string; state: string }[] };
+  intakes: { ref: string; course: string; start: string; end: string; state: string }[]; regions: string[]; work: Work };
 
 const STANDING_TONE: Record<string, Tone> = { Current: "ok", Expiring: "warn", Lapsed: "bad" };
 
@@ -125,7 +130,42 @@ function CertificateUpload({ regId, onDone }: { regId: number; onDone: (what: st
   );
 }
 
-function FacilitatorPanel({ code, canRecord, onSaved }: { code: string; canRecord: boolean; onSaved: (what: string) => void }) {
+/** The regions a facilitator delivers in: any provinces, and Online. Click to add or remove. */
+function Regions({ code, regions, all, canAssign, onSaved }: { code: string; regions: string[]; all: string[]; canAssign: boolean; onSaved: (w: string) => void }) {
+  const set = useAction<{ regions: string[] }>("PUT", `/facilitators/${code}/regions`);
+  if (!canAssign) return regions.length ? <div className="row">{regions.map((r) => <span key={r} className="topic-chip on">{r}</span>)}</div>
+    : <p className="small tone-warn" style={{ margin: 0 }}>No regions assigned.</p>;
+  const toggle = (r: string) => set.mutate({ regions: regions.includes(r) ? regions.filter((x) => x !== r) : [...regions, r] },
+    { onSuccess: (x) => onSaved(x.meta.audit?.what ?? "") });
+  return (
+    <div className="stack-12">
+      <div className="row" role="group" aria-label="Regions">
+        {all.map((r) => (
+          <button key={r} type="button" className={`topic-chip${regions.includes(r) ? " on" : ""}`} aria-pressed={regions.includes(r)}
+                  disabled={set.isPending} onClick={() => toggle(r)}>
+            {regions.includes(r) ? <i className="fas fa-check" aria-hidden /> : null} {r}</button>
+        ))}
+      </div>
+      <Blocked refusal={set.refusal} />
+    </div>
+  );
+}
+
+function WorkList({ work }: { work: Work }) {
+  if (!work.items.length) return <p className="small muted" style={{ margin: 0 }}>No delivery in the last six months to judge by.</p>;
+  return (
+    <table className="plain-table">
+      <tbody>
+        {work.items.map((i) => (
+          <tr key={i.key}><td><b>{i.label}</b><div className="small muted">{i.note}</div></td>
+            <td style={{ textAlign: "right" }}><Status tone={i.tone}>{i.tone === "ok" ? "In order" : i.tone === "warn" ? "Needs attention" : "Action required"}</Status></td></tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function FacilitatorPanel({ code, canRecord, cover, onSaved }: { code: string; canRecord: boolean; cover?: Cover; onSaved: (what: string) => void }) {
   const q = useRegister<Detail>(`/facilitators/${code}`);
   const [renewing, setRenewing] = useState(false);
   if (q.error) return <Blocked refusal={q.error} />;
@@ -164,6 +204,17 @@ function FacilitatorPanel({ code, canRecord, onSaved }: { code: string; canRecor
           <RegistrationForm personRef={d.ref} current={current} onCancel={() => setRenewing(false)} onDone={(w) => { setRenewing(false); onSaved(w); }} />
         </div>
       ) : null}
+
+      <div className="fac-cols">
+        <section>
+          <div className="eyebrow">Regions</div>
+          <Regions code={d.ref} regions={d.regions} all={cover?.all ?? []} canAssign={cover?.canAssign ?? false} onSaved={onSaved} />
+        </section>
+        <section>
+          <div className="eyebrow">Keeping up with the work · last six months</div>
+          <WorkList work={d.work} />
+        </section>
+      </div>
 
       <div className="fac-cols">
         <section>
@@ -209,6 +260,7 @@ function FacilitatorPanel({ code, canRecord, onSaved }: { code: string; canRecor
 export default function Facilitators() {
   const q = useRegister<Row[]>("/facilitators");
   const opts = useRegister<Options>("/facilitators/options");
+  const cover = useRegister<Cover>("/facilitators/cover");
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState("");
@@ -233,15 +285,36 @@ export default function Facilitators() {
       </SectionHead>
       <Register rows={rows} rowKey={(r) => r.ref}
         onRow={(r) => setOpen(r.ref === open ? null : r.ref)}
-        expanded={(r) => (r.ref === open ? <FacilitatorPanel code={r.ref} canRecord={canRecord} onSaved={say} /> : null)}
+        expanded={(r) => (r.ref === open ? <FacilitatorPanel code={r.ref} canRecord={canRecord} cover={cover.data?.data} onSaved={say} /> : null)}
         columns={[
           { key: "name", label: "Facilitator", render: (r) => <b>{r.name}</b> },
           { key: "reg", label: "Registration", render: (r) => r.registration },
           { key: "body", label: "Body", render: (r) => r.body },
           { key: "exp", label: "Expires", render: (r) => r.expires, mono: true },
+          { key: "regions", label: "Regions", render: (r) => r.regions.join(", ") || <span className="small tone-warn">None assigned</span> },
           { key: "blocks", label: "Scheduled intakes", render: (r) => r.blocks.join(", ") || "—", mono: true },
-          { key: "pos", label: "Position", render: (r) => <Status tone={r.tone}>{r.position}</Status> },
+          { key: "pos", label: "Registration", render: (r) => <Status tone={r.tone}>{r.position}</Status> },
+          { key: "work", label: "Work", render: (r) => <Status tone={r.work.tone}>{r.work.position}</Status> },
         ]} />
+
+      <SectionHead title="Cover by region" />
+      {cover.data ? (
+        <Register rows={cover.data.data.regions.filter((g) => g.facilitators.length || g.intakes.length)} rowKey={(g) => g.region}
+          source="Facilitator regions · intakes in the next four months"
+          columns={[
+            { key: "region", label: "Region", render: (g) => <b>{g.region}</b> },
+            { key: "who", label: "Facilitators", render: (g) => g.facilitators.length
+              ? g.facilitators.map((f) => f.able ? f.name : `${f.name} (cannot deliver)`).join(", ") : <span className="tone-bad">None</span> },
+            { key: "intakes", label: "Coming up", render: (g) => g.intakes.length ? (
+              <>{g.intakes.length} {g.intakes.length === 1 ? "intake" : "intakes"}
+                {g.intakes.some((i) => i.fromOutside) ? <div className="small muted">From outside the region: {g.intakes.filter((i) => i.fromOutside)
+                  .map((i) => `${i.ref} (${i.facilitator})`).join(", ")}</div> : null}</>) : "—" },
+            { key: "pos", label: "Position", render: (g) => <Status tone={g.tone}>{g.position}</Status> },
+          ]} />
+      ) : null}
+      {cover.data ? (
+        <p className="small muted">No facilitator covers {cover.data.data.regions.filter((g) => !g.facilitators.length && !g.intakes.length).map((g) => g.region).join(", ")}.</p>
+      ) : null}
       {adding ? (
         <Modal title="Add a facilitator registration" onClose={() => setAdding(false)} wide>
           <RegistrationForm onCancel={() => setAdding(false)} onDone={(w) => { setAdding(false); say(w); }} />

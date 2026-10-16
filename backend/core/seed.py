@@ -127,7 +127,7 @@ def seed(passwords: dict[str, str] | None = None, write_file: bool = False) -> d
     sipho.save()
 
     for code, name in [
-        ("overview", "Department picture"), ("demand", "Enquiries, contacts and quotes"),
+        ("overview", "Training home"), ("demand", "Enquiries, contacts and quotes"),
         ("courses", "Catalogue, development and packs"), ("delivery", "Plan, sessions and attendance"),
         ("learners", "Learners and enrolments"), ("results", "Results"), ("moderation", "Moderation"),
         ("certification", "Certification"), ("assurance", "Accreditation, partnerships and risk"),
@@ -150,6 +150,11 @@ def seed(passwords: dict[str, str] | None = None, write_file: bool = False) -> d
     for name in ["Thandi Ncube", "William", "Naledi Phiri", "Sipho Dlamini", "Dr Riaan Steyn"]:
         grants[name] = [("delivery", "write", "own"), ("results", "write", "own"), ("courses", "read", "all")]
     grants["Dr Riaan Steyn"].append(("assurance", "read", "all"))
+    for name, regions in {"Thandi Ncube": ["KwaZulu-Natal"], "William": ["Gauteng", "Free State"], "Naledi Phiri": ["Gauteng", "Online"],
+                          "Sipho Dlamini": ["Gauteng", "North West"], "Dr Riaan Steyn": ["North West"],
+                          "Palesa Mpana": ["Gauteng", "Online"]}.items():
+        acc[name].regions = regions
+        acc[name].save(update_fields=["regions"])
     for name, rows in grants.items():
         for seg, access, scope in rows:
             AccountSegment.objects.create(account=acc[name], segment_id=seg, access=access, scope=scope)
@@ -203,6 +208,8 @@ def seed(passwords: dict[str, str] | None = None, write_file: bool = False) -> d
         ("University of Johannesburg", "University", "University"), ("Tshwane University of Technology", "University", "University"),
     ]:
         orgs[name] = Organisation.objects.create(name=name, sector=sector, relationship=rel)
+    orgs["University of Johannesburg"].facilitator_body = bodies["HPCSA"]  # UJ is strict: HPCSA-registered facilitators only
+    orgs["University of Johannesburg"].save()
 
     enquiries = {}
     for ref, names, org, kind, channel, days, course, interest, stage, owner in [
@@ -400,13 +407,25 @@ def seed(passwords: dict[str, str] | None = None, write_file: bool = False) -> d
                                  granted_on=D("2023-03-01"), expires_on=D("2028-02-29"))
     Accreditation.objects.create(reference="ACC-0002", body=bodies["SAATCA"], scope="Internal auditor training",
                                  granted_on=D("2023-12-01"), expires_on=D("2026-11-30"))
+    from assurance.workflow import spread
+
+    for held in Accreditation.objects.all():
+        held.courses.set([c for c in courses.values() if c.is_accredited and c.accreditation_body_id == held.body_id])
     for ref, body, scope, owner, target, step in [
         ("ACC-P01", "QCTO", "Occupational certificate — meat inspector", "Palesa Mpana", "2027-06-30", 1),
         ("ACC-P02", "AGRISETA", "Extension of scope — game meat examination", "William", "2027-02-28", 0),
         ("ACC-P03", "SAATCA", "Renewal — internal auditor training", "Palesa Mpana", "2026-11-30", 2),
     ]:
-        AccreditationProject.objects.create(reference=ref, body=bodies[body], scope=scope, owner=acc[owner],
-                                            target_date=D(target), step_index=step)
+        project = AccreditationProject.objects.create(
+            reference=ref, body=bodies[body], scope=scope, owner=acc[owner], target_date=D(target), step_index=step,
+            step_due=spread(D(target) - dt.timedelta(days=240), D(target)),
+            step_done=[D(target) - dt.timedelta(days=240)] * step + [None] * (6 - step), step_notes=[""] * 6)
+        if "game" in scope.lower():
+            project.courses.set([courses["TRN-GAME"]])
+        if scope.lower().startswith("renewal"):
+            project.renews = Accreditation.objects.get(reference="ACC-0002")
+            project.courses.set([courses["TRN-IA"]])
+            project.save()
     for ref, org, blk, label, s, e, submitted in [
         ("PLC-0007", "University of Pretoria", "PLN-03", "UP cohort — September", "2026-09-07", "2026-09-18", None),
         ("PLC-0006", "University of Johannesburg", None, "UJ cohort — August", "2026-08-10", "2026-08-21", None),
@@ -419,7 +438,7 @@ def seed(passwords: dict[str, str] | None = None, write_file: bool = False) -> d
         ("TRK-01", "KwaZulu-Natal delivery stops if the one accredited facilitator is absent", "Single cover in the province", "High",
          "Facilitator absent for more than three working days, or utilisation above 90%", None, "Palesa Mpana", "Second facilitator requested"),
         ("TRK-02", "Internal auditor delivery suspended if the SAATCA renewal lapses", "Assessment instrument update outstanding", "Medium",
-         "Evidence pack incomplete 60 days before 2026-11-30", "2026-09-01", "Palesa Mpana", "Evidence pack in progress"),
+         "Supporting documents incomplete 60 days before 2026-11-30", "2026-09-01", "Palesa Mpana", "Supporting documents in progress"),
         ("TRK-03", "University reports submitted after the twenty-day deadline", "Manual tracking of placement periods", "Medium",
          "Any report unsubmitted at day 15", None, "P. Mokoena", "Tracked on the partnerships register"),
     ]:

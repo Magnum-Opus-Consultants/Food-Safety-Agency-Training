@@ -8,7 +8,7 @@ import { findNav } from "./nav";
 
 export type Me = {
   ref: string; name: string; position: string; role: string; roleLabel: string;
-  segments: string[]; writes: string[]; canMoveClock: boolean; canSeeAudit: boolean; canSeeDesk: boolean;
+  segments: string[]; writes: string[]; canMoveClock: boolean; canSeeAudit: boolean; canSeeDesk: boolean; canManageUsers: boolean;
 };
 
 export function useScreen() {

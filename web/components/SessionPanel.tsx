@@ -26,7 +26,7 @@ export function SessionPanel({ code: ref }: { code: string }) {
   const late = useAction<{ learnerRef: string; present: boolean; reason: string }>("POST", `/sessions/${ref}/attendance/late`);
 
   if (q.error) return <Blocked refusal={q.error} />;
-  if (!q.data) return <Loading what="register" />;
+  if (!q.data) return <Loading what="register" inline />;
   const s = q.data.data;
   const locked = s.registerState === "Locked";
   const marked = Object.keys(marks).length;

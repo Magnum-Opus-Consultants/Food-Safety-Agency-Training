@@ -342,6 +342,11 @@ def import_cohort(actor, organisation_ref: str, block_ref: str, people: list[Per
         raise Refusal("already_enrolled", [f"Every student on this list is already enrolled on {block.reference}."],
                       "Nothing to import.")
     _check_seats(block, len(new))
+    from assurance.placements import requirement_gap
+
+    gap = requirement_gap(university, block)
+    if gap:
+        raise Refusal("facilitator_not_accepted", [gap], f"Assign a facilitator {university.name} accepts before importing its students.")
     # The placement agreement is the entry requirement, so students start at Confirmed.
     enrolments = [_enrol(actor, l, block, "UniversityAgreement", stage=1) for l in new]
     placement = Placement.objects.filter(organisation=university, plan_block=block, is_active=True).first()

@@ -82,13 +82,14 @@ def topics_text(topics: list[str], other: str) -> str:
 
 @transaction.atomic
 def log_enquiry(actor, names, organisation, channel, kind, course, interest, screen="enquiries", email="", phone="",
-                topics=None, topic_other="", enquiring_for="Individual"):
+                topics=None, topic_other="", enquiring_for="Individual", source="", campaign=None):
     contact = Contact.objects.create(names=names, organisation=organisation, email=email, phone=phone, created_by=actor)
     assignee = route(channel)
     enquiry = Enquiry.objects.create(
         contact=contact, kind=kind, channel=channel, received_at=clock.now(), course=course,
         course_interest=interest, topics=topics or [], topic_other=topic_other, assigned_to=assignee, created_by=actor,
         enquiring_for=enquiring_for if kind == "Enquiry" else "Individual",
+        source=source if kind == "Enquiry" else "", campaign=campaign if source == "Campaign" else None,
     )
     who = assignee.display_name if assignee else "nobody — unassigned, flagged for action"
     audit = record(actor, f"{enquiry.reference} logged from {channel} and routed to {who}", enquiry, screen=screen)
@@ -202,6 +203,22 @@ def update_enquiry(actor, enquiry, changes: dict, screen="enquiries"):
             reasons.append(f"{enquiry.reference} has a quotation, so it stays a company enquiry.")
         else:
             note("Enquiring for", FOR_LABEL[enquiry.enquiring_for], FOR_LABEL[for_after])
+    new_source, new_campaign = enquiry.source, enquiry.campaign
+    if "source" in changes or "campaignRef" in changes:
+        from demand.campaigns import source_label
+        from demand.models import SOURCE_LABEL, Campaign
+
+        new_source = changes.get("source", enquiry.source) or ""
+        ref = changes.get("campaignRef", enquiry.campaign.reference if enquiry.campaign_id else "") or ""
+        new_campaign = Campaign.objects.filter(is_active=True, reference=ref).first() if new_source == "Campaign" and ref else None
+        if new_source and new_source not in SOURCE_LABEL:
+            reasons.append("Choose how they heard about FSA.")
+        elif new_source == "Campaign" and new_campaign is None:
+            reasons.append("Choose the campaign that brought them.")
+        else:
+            class _E:  # what the label would read after the change
+                source, campaign, campaign_id = new_source, new_campaign, new_campaign.pk if new_campaign else None
+            note("Heard about us", source_label(enquiry) if enquiry.source else "", source_label(_E) if new_source else "")
     org_after = (changes["organisation"] or "").strip() if "organisation" in changes else (
         contact.organisation.name if contact.organisation_id else "")
     if kind_after == "Enquiry" and for_after == "Company" and not org_after:
@@ -230,6 +247,7 @@ def update_enquiry(actor, enquiry, changes: dict, screen="enquiries"):
     if "Owner" in after: enquiry.assigned_to = new_owner
     if "Additional remarks" in after: enquiry.notes = after["Additional remarks"]
     if "Enquiring for" in after: enquiry.enquiring_for = for_after
+    if "Heard about us" in after: enquiry.source, enquiry.campaign = new_source, new_campaign
     enquiry.modified_by = actor
     enquiry.save()
 

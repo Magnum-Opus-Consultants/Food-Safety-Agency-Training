@@ -10,7 +10,7 @@ export default function SessionRegister() {
   const { ref } = useParams<{ ref: string }>();
   return (
     <>
-      <div className="row"><Link href="/sessions" className="small"><i className="fas fa-arrow-left" aria-hidden /> All sessions</Link></div>
+      <div className="row"><Link href="/sessions" className="small"><i className="fas fa-arrow-left" aria-hidden /> All sessions</Link><b className="mono">{ref}</b></div>
       <PageHeader lead={ref} />
       <section className="card" style={{ padding: 16 }}><SessionPanel code={ref} /></section>
       <AuditTrail screen="sessions" />

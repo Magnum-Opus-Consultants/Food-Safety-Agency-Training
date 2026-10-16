@@ -9,6 +9,7 @@ Rules carried from 04-roles-and-access.md:
 import datetime as dt
 
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
 
 from core import clock
@@ -64,6 +65,9 @@ class Account(AbstractBaseUser, PermissionsMixin, TrackedModel):
     state = models.CharField(max_length=10, choices=[("Active", "Active"), ("Suspended", "Suspended")], default="Active")
     suspended_reason = models.CharField(max_length=240, blank=True)
     suspended_at = models.DateTimeField(null=True, blank=True)
+    # The provinces a facilitator delivers in. Planning prefers them for intakes there; an intake
+    # elsewhere is a warning, not a block (a facilitator may travel).
+    regions = ArrayField(models.CharField(max_length=40), default=list, blank=True)
     is_staff = models.BooleanField(default=False)
 
     USERNAME_FIELD = "username"

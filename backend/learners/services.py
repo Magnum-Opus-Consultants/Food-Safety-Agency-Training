@@ -8,20 +8,8 @@ from audit.services import record
 from core import clock
 from core.api_support import Refusal
 from core.models import next_ref
-from learners.models import ENR_STAGES, Certificate, Moderation
+from learners.models import ENR_STAGES, Certificate
 from learners.rules import advance_blockers, certificate_blockers
-
-
-@transaction.atomic
-def moderate(actor, result, outcome: str | None = None, notes: str = "", screen="results"):
-    if hasattr(result, "moderation"):
-        raise Refusal("already_moderated", [f"{result.reference} was moderated on "
-                                            f"{result.moderation.moderated_at:%Y-%m-%d}."], "Nothing to moderate.")
-    outcome = outcome or result.outcome
-    Moderation.objects.create(result=result, moderated_by=actor, moderated_at=clock.now(), outcome=outcome, notes=notes)
-    label = "competent" if outcome == "Competent" else "not yet competent"
-    return record(actor, f"{result.reference} moderation recorded — {label}", result, screen=screen,
-                  after={"outcome": outcome})
 
 
 @transaction.atomic
@@ -71,6 +59,11 @@ def update_gate(actor, enrolment, prerequisite_result=None, grade10_evidence_hel
     before = {"prerequisiteResult": str(enrolment.prerequisite_result) if enrolment.prerequisite_result is not None else None,
               "grade10EvidenceHeld": enrolment.grade10_evidence_held}
     if prerequisite_result is not None:
+        from learners.models import PrerequisiteAttempt
+
+        if enrolment.prerequisite_result is not None and not enrolment.prerequisite_attempts.exists():
+            PrerequisiteAttempt.objects.create(enrolment=enrolment, result=enrolment.prerequisite_result, created_by=enrolment.modified_by)
+        PrerequisiteAttempt.objects.create(enrolment=enrolment, result=Decimal(str(prerequisite_result)), created_by=actor, modified_by=actor)
         enrolment.prerequisite_result = Decimal(str(prerequisite_result))
         changes.append(f"prerequisite result {prerequisite_result:g}%")
     if grade10_evidence_held:

@@ -16,6 +16,7 @@ from demand.models import Enquiry, Quotation, QuotationFollowUp
 from identity.models import READ_ALL_ROLES, Account
 from learners.models import Enrolment, Moderation, Result
 from learners.rules import gate_blockers
+from assurance.workflow import current_held, overdue_projects
 from oversight.models import Rotation
 
 QUOTE_APPROVAL_CENTS = 50_000_00  # R 50 000
@@ -220,13 +221,24 @@ def escalated(today=None) -> list[dict]:
             "age": (f"lapsed {(today - reg.expires_on).days} days ago" if reg.expires_on < today
                     else f"expires in {(reg.expires_on - today).days} days"), "state": "At risk", "tone": "bad" if standing == "Lapsed" else "warn",
         })
-    for acc in Accreditation.objects.filter(is_active=True, expires_on__lte=today + dt.timedelta(days=90)).select_related("body"):
+    for acc in current_held().filter(expires_on__lte=today + dt.timedelta(days=90)).select_related("body"):
         items.append({
             "ref": acc.reference, "route": "/accreditation",
             "title": f"{acc.body.name} renewal — {acc.scope}, due {acc.expires_on.isoformat()}",
             "detail": "Delivery under this scope stops if the renewal lapses.",
             "trigger": "Accreditation item at risk", "triggerKind": "Topic",
             "age": f"Due in {(acc.expires_on - today).days} days", "state": "Decision", "tone": "bad",
+        })
+    from assurance.models import ACC_STEPS
+
+    for p in overdue_projects(today):
+        due = p.step_due[p.step_index]
+        items.append({
+            "ref": p.reference, "route": "/accreditation",
+            "title": f"{p.body.name} — {p.scope}: {ACC_STEPS[p.step_index].lower()} overdue",
+            "detail": f"Due {due.isoformat()}; run by {p.owner.display_name}; target {p.target_date.isoformat()}.",
+            "trigger": "Accreditation item at risk", "triggerKind": "Topic",
+            "age": f"{(today - due).days} days overdue", "state": "At risk", "tone": "warn",
         })
     for e in Enquiry.objects.filter(is_active=True, kind__in=["Complaint", "Opportunity"], resolved_at__isnull=True).select_related("contact__organisation"):
         complaint = e.kind == "Complaint"
@@ -326,7 +338,7 @@ def attention(today=None, account=None) -> list[dict]:
         rows.append({"title": "Depository documents outstanding", "n": depository_outstanding().count(), "tone": "warn", "route": "/documents",
                      "detail": "Documents the training depository is still waiting for."})
     if attends_to(account, "AccreditationRenewals"):
-        accreditations =Accreditation.objects.filter(is_active=True, expires_on__lte=today + dt.timedelta(days=90)).select_related("body")
+        accreditations =current_held().filter(expires_on__lte=today + dt.timedelta(days=90)).select_related("body")
         rows.append({"title": "Accreditation renewal due", "n": accreditations.count(), "tone": "warn", "route": "/accreditation",
                      "detail": "; ".join(f"{a.body.name} renewal {a.expires_on.isoformat()}" for a in accreditations) or "No renewal inside ninety days."})
     return rows
@@ -374,7 +386,7 @@ def hero(today=None, account=None) -> dict:
     mod = awaiting_moderation().count()
     stale = len(stale_enquiries(today))
     registers = len(registers_outstanding(today))
-    renewals = Accreditation.objects.filter(is_active=True, expires_on__lte=today + dt.timedelta(days=90)).count()
+    renewals = current_held().filter(expires_on__lte=today + dt.timedelta(days=90)).count()
 
     def pl(n, one, many):
         return f"{n} {one if n == 1 else many}"

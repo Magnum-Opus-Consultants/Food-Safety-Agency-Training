@@ -32,6 +32,8 @@ class Api(TestCase):
         return r.json()
 
     def send(self, method, path, body=None, screen="test"):
+        if method == "post" and path == "/api/fsa/enquiries" and body is not None and "source" not in body:
+            body = {**body, "source": "Unknown"}  # "how did you hear about us" is asked on every enquiry; most tests don't care
         return getattr(self.client, method)(path, body or {}, content_type="application/json", HTTP_X_FSA_SCREEN=screen)
 
     def counts(self):
@@ -1147,3 +1149,476 @@ class IntakeSchedules(Api):
         self.assertEqual(block.json()["data"]["sessionCount"], 10)
         no_days = self.intake(schedule="Weekly", weekdays=[], start="2026-10-19", end="2026-10-30")
         self.assertIn("Choose the days of the week", no_days.json()["blockedBy"][0])
+
+
+
+class UserManagement(Api):
+    def test_the_head_of_department_adds_a_facilitator_and_changes_access(self):
+        self.login(MOKOENA)
+        self.assertEqual(self.client.get("/api/fsa/users").status_code, 403)
+        self.login(PALESA)
+        self.assertTrue(self.get("/api/fsa/me")["data"]["canManageUsers"])
+        r = self.send("post", "/api/fsa/users", {"name": "Lindiwe Dube", "email": "lindiwe@fsa.example", "role": "Facilitator",
+                                                 "position": "Facilitator — short courses", "reportsTo": PALESA}, screen="users")
+        self.assertEqual(r.status_code, 200, r.content)
+        ref, username, password = r.json()["data"]["ref"], r.json()["data"]["username"], r.json()["data"]["password"]
+        self.assertEqual(username, "lindiwe.dube")
+        self.assertNotIn(password, r.json()["meta"]["audit"]["what"])
+        self.client.logout()
+        signed = self.client.post("/api/fsa/auth/login", {"username": username, "password": password}, content_type="application/json")
+        self.assertEqual(signed.status_code, 200)
+        self.login(PALESA)
+        moved = self.send("patch", f"/api/fsa/users/{ref}", {"role": "EnquiryHandler"})
+        self.assertIn("role Facilitator → Enquiry handler", moved.json()["meta"]["audit"]["what"])
+        self.assertIn("access changed", moved.json()["meta"]["audit"]["what"])
+        grants = [u for u in self.get("/api/fsa/users")["data"] if u["ref"] == ref][0]["grants"]
+        self.assertEqual(grants["demand"], ["write", "all"])
+        self.assertEqual(self.send("post", f"/api/fsa/users/{ref}/suspend", {"reason": "Left FSA"}).status_code, 200)
+        self.assertEqual(self.send("post", f"/api/fsa/users/{ref}/reinstate").status_code, 200)
+
+    def test_managers_cannot_change_themselves_or_give_restricted_roles(self):
+        self.login(PALESA)
+        self.assertEqual(self.send("patch", f"/api/fsa/users/{PALESA}", {"role": "Director"}).status_code, 403)
+        self.assertEqual(self.send("post", f"/api/fsa/users/{PALESA}/suspend", {"reason": "x"}).status_code, 403)
+        self.assertEqual(self.send("post", "/api/fsa/users", {"name": "X Y", "role": "SystemAdministrator", "position": "x"}).status_code, 403)
+
+
+    def test_directors_manage_users_and_may_appoint_a_director_but_not_an_administrator(self):
+        self.login(NICOLE)
+        self.assertTrue(self.get("/api/fsa/me")["data"]["canManageUsers"])
+        d = self.send("post", "/api/fsa/users", {"name": "New Director", "role": "Director", "position": "GM Operations"})
+        self.assertEqual(d.status_code, 200, d.content)
+        self.assertEqual(self.send("post", "/api/fsa/users", {"name": "X Y", "role": "SystemAdministrator", "position": "x"}).status_code, 403)
+        self.login(THANDI)
+        self.assertEqual(self.client.get("/api/fsa/users").status_code, 403)
+
+
+class AccreditationWorkflow(Api):
+    def test_a_renewal_keeps_history_finishes_the_renewal_project_and_clears_the_desk(self):
+        self.login(PALESA)
+        held = {a["ref"]: a for a in self.get("/api/fsa/accreditations")["data"]["held"]}
+        self.assertEqual(held["ACC-0002"]["tone"], "warn")  # SAATCA, expires 2026-11-30: renewal due
+        self.assertIn("TRN-IA", [c["code"] for c in held["ACC-0002"]["courses"]])
+        self.assertIn("ACC-0002", {i["ref"] for i in self.get("/api/fsa/desk")["data"]["escalated"]})
+        r = self.send("post", "/api/fsa/accreditations/ACC-0002/renew", {"number": "SAATCA-TP-77", "granted": "2026-09-08",
+                                                                          "expires": "2029-11-30"}, screen="accreditation")
+        self.assertEqual(r.status_code, 200, r.content)
+        new = r.json()["data"]["ref"]
+        detail = self.get(f"/api/fsa/accreditations/{new}")["data"]
+        self.assertEqual([h["ref"] for h in detail["history"]], [new, "ACC-0002"])
+        self.assertNotIn("ACC-0002", {a["ref"] for a in self.get("/api/fsa/accreditations")["data"]["held"]})
+        self.assertNotIn("ACC-0002", {i["ref"] for i in self.get("/api/fsa/desk")["data"]["escalated"]})
+        projects = {p["ref"]: p for p in self.get("/api/fsa/accreditations")["data"]["projects"]}
+        self.assertEqual((projects["ACC-P03"]["state"], projects["ACC-P03"]["result"]), ("Accredited", new))
+        again = self.send("post", "/api/fsa/accreditations/ACC-0002/renew", {"expires": "2030-01-01"})
+        self.assertEqual(again.json()["error"], "already_renewed")
+
+    def test_a_new_scope_runs_through_its_steps_to_an_accreditation(self):
+        self.login(PALESA)
+        start = self.send("post", "/api/fsa/accreditation-projects",
+                          {"body": "QCTO", "scope": "Hygiene short course", "owner": MOKOENA, "target": "2027-03-31", "courses": ["TRN-HYG"]})
+        self.assertEqual(start.status_code, 200, start.content)
+        ref = start.json()["data"]["ref"]
+        self.login(THANDI)  # not the owner, not a manager
+        self.assertEqual(self.send("post", f"/api/fsa/accreditation-projects/{ref}/step", {}).status_code, 403)
+        self.login(MOKOENA)  # the owner moves it on
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        def attach(n, name="doc.pdf"):
+            return self.client.post(f"/api/fsa/accreditation-projects/{ref}/steps/{n}/documents",
+                                    {"file": SimpleUploadedFile(name, b"%PDF-1.7 step document")}, HTTP_X_FSA_SCREEN="accreditation")
+
+        bare = self.send("post", f"/api/fsa/accreditation-projects/{ref}/step", {"note": "done"})
+        self.assertEqual(bare.json()["error"], "document_needed")  # every step is completed with its document on file
+        self.assertIn("scope letter", bare.json()["blockedBy"][0])
+        self.assertEqual(attach(5, "visit-confirmation.pdf").status_code, 200)  # filed ahead of its step
+        for n in range(1, 6):
+            self.assertEqual(attach(n).status_code, 200)
+            step = self.send("post", f"/api/fsa/accreditation-projects/{ref}/step", {"note": "done"})
+            self.assertEqual(step.status_code, 200, step.content)
+        self.assertEqual(step.json()["data"]["plan"][5]["step"], "Accreditation granted")
+        self.assertEqual(len(step.json()["data"]["plan"][2]["documents"]), 1)
+        self.assertEqual(self.client.get(step.json()["data"]["plan"][2]["documents"][0]["url"]).status_code, 200)
+        self.assertEqual(attach(6, "letter.pdf").status_code, 200)
+        missing = self.send("post", f"/api/fsa/accreditation-projects/{ref}/step", {})
+        self.assertEqual(missing.status_code, 422)
+        done = self.send("post", f"/api/fsa/accreditation-projects/{ref}/step", {"number": "QCTO-123", "expires": "2030-03-31"})
+        self.assertEqual(done.json()["data"]["state"], "Accredited")
+        granted = self.get(f"/api/fsa/accreditations/{done.json()['data']['result']}")["data"]
+        self.assertEqual(granted["certificate"]["name"], "letter.pdf")  # the letter on the last step is the certificate
+        from courses.models import Course
+        self.assertTrue(Course.objects.get(code="TRN-HYG").is_accredited)
+
+    def test_a_lapsed_accreditation_stops_delivery_of_its_courses(self):
+        from assurance.models import Accreditation
+
+        Accreditation.objects.filter(reference="ACC-0001").update(expires_on="2026-09-08")  # AgriSETA meat examination lapsed
+        self.login(PALESA)
+        plan = {b["ref"]: b for b in self.get("/api/fsa/plan")["data"]}
+        self.assertTrue(any("Delivery under that scope stops" in r for r in plan["PLN-10"]["confirmBlockedBy"]))
+        held = {a["ref"]: a for a in self.get("/api/fsa/accreditations")["data"]["held"]}
+        self.assertIn("delivery stopped", held["ACC-0001"]["position"])
+
+
+
+class CertificatePdf(Api):
+    def test_an_issued_certificate_opens_as_a_pdf_and_downloads(self):
+        from learners.models import Certificate
+
+        self.login(PALESA)
+        ref = Certificate.objects.first().reference
+        view = self.client.get(f"/api/fsa/certificates/{ref}/pdf")
+        self.assertEqual(view.status_code, 200)
+        self.assertEqual(view["Content-Type"], "application/pdf")
+        self.assertTrue(view.content.startswith(b"%PDF"))
+        self.assertTrue(view["Content-Disposition"].startswith("inline"))
+        self.assertTrue(self.client.get(f"/api/fsa/certificates/{ref}/pdf?download=true")["Content-Disposition"].startswith("attachment"))
+        self.login(MOKOENA)
+        self.assertEqual(self.client.get(f"/api/fsa/certificates/{ref}/pdf").status_code, 403)
+
+
+HEIN, WILLIAM = "USR-0004", "USR-0008"
+
+
+class Assessment(Api):
+    """The assessor captures the mark with the marked assessment; someone else moderates it from that evidence."""
+
+    def capture(self, enrolment, mark="72", outcome="Competent", content=b"%PDF-1.7 marked script", name="script.pdf"):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        data = {"enrolment": enrolment, "mark": mark, "outcome": outcome, "notes": "Practical observed"}
+        if content is not None:
+            data["file"] = SimpleUploadedFile(name, content)
+        return self.client.post("/api/fsa/results", data, HTTP_X_FSA_SCREEN="results")
+
+    def test_assessor_captures_a_result_with_the_assessment_and_a_moderator_agrees(self):
+        self.login(THANDI)
+        options = self.get("/api/fsa/results/options")["data"]["intakes"]
+        lerato = next(l for i in options for l in i["learners"] if l["enrolment"] == "ENR-0512")
+        self.assertEqual(lerato["state"], "ready")
+        self.assertEqual(self.capture("ENR-0512", content=None).json()["error"], "invalid")
+        self.assertEqual(self.capture("ENR-0512", content=b"MZ not a document").status_code, 422)
+        self.assertEqual(self.capture("ENR-0512", mark="140").status_code, 422)
+        r = self.capture("ENR-0512")
+        self.assertEqual(r.status_code, 200, r.content)
+        row = r.json()["data"]
+        self.assertEqual((row["mark"], row["outcome"], row["position"]), (72.0, "Competent", "Awaiting moderation"))
+        self.assertTrue(row["ownAssessment"])
+        view = self.client.get(row["evidence"]["url"])
+        self.assertEqual(view.status_code, 200)
+        self.assertTrue(b"".join(view.streaming_content).startswith(b"%PDF"))
+        self.assertEqual(self.capture("ENR-0512").json()["error"], "awaiting_moderation")
+        self.assertEqual(self.send("post", f"/api/fsa/results/{row['ref']}/moderate", {}).status_code, 403)
+
+        self.login(HEIN)
+        self.assertEqual(self.client.get(row["evidence"]["url"]).status_code, 200)
+        done = self.send("post", f"/api/fsa/results/{row['ref']}/moderate", {"notes": "Script and practical checked"})
+        self.assertEqual(done.status_code, 200, done.content)
+        self.assertEqual(done.json()["data"]["position"], "Moderated — awaiting certificate")
+        self.assertEqual(done.json()["data"]["moderationNotes"], "Script and practical checked")
+        self.assertEqual(self.send("post", f"/api/fsa/results/{row['ref']}/moderate", {}).json()["error"], "already_moderated")
+
+    def test_nobody_moderates_their_own_assessment(self):
+        self.login(PALESA)
+        ref = self.capture("ENR-0512").json()["data"]["ref"]
+        r = self.send("post", f"/api/fsa/results/{ref}/moderate", {})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error"], "own_assessment")
+
+    def test_changing_the_outcome_needs_a_reason_and_not_yet_competent_needs_a_plan(self):
+        self.login(HEIN)
+        r = self.send("post", "/api/fsa/results/RES-0293/moderate", {"outcome": "NotYetCompetent"})
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(len(r.json()["blockedBy"]), 3)  # reason, remediation plan, re-assessment date
+        r = self.send("post", "/api/fsa/results/RES-0293/moderate",
+                      {"outcome": "NotYetCompetent", "notes": "Hygiene section not answered", "remediation": "Redo the hygiene module",
+                       "reassessBy": "2026-09-30"})
+        self.assertEqual(r.status_code, 200, r.content)
+        row = r.json()["data"]
+        self.assertEqual((row["outcome"], row["moderatedOutcome"], row["position"]), ("Competent", "NotYetCompetent", "Moderated — remediation"))
+        self.assertIn("2026-09-30", row["remediation"])
+        self.assertEqual(Moderation.objects.get(result__reference="RES-0293").notes, "Hygiene section not answered")
+
+    def test_a_learner_moderated_not_yet_competent_is_reassessed_on_a_new_result(self):
+        self.login(WILLIAM)
+        r = self.capture("ENR-0500", mark="68")
+        self.assertEqual(r.status_code, 200, r.content)
+        row = r.json()["data"]
+        self.assertEqual(row["reassesses"], "RES-0290")
+        rows = {x["ref"]: x for x in self.get("/api/fsa/results")["data"]["items"]}
+        self.assertEqual(rows["RES-0290"]["reassessedOn"], row["ref"])
+        self.assertTrue(rows["RES-0290"]["position"].startswith("Re-assessed on"))
+        self.assertEqual(self.capture("ENR-0499").json()["error"], "already_competent")
+        self.assertEqual(self.capture("ENR-0001").json()["error"], "not_started")  # PLN-04 starts 2026-09-14
+
+    def test_a_facilitator_captures_only_for_their_own_intakes(self):
+        self.login(THANDI)
+        self.assertEqual(self.capture("ENR-0500").json()["error"], "not_assessable")
+        self.assertEqual(self.client.get("/api/fsa/results/RES-0290/assessment").status_code, 404)
+
+
+class Placements(Api):
+    """University placements: the university's facilitator rule, the checklist, and the twenty-day report."""
+
+    def upload(self, path, name="doc.pdf", content=b"%PDF-1.7 document"):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        return self.client.post(path, {"file": SimpleUploadedFile(name, content)}, HTTP_X_FSA_SCREEN="partnerships")
+
+    def row(self, ref):
+        return next(p for p in self.get("/api/fsa/partnerships")["data"]["items"] if p["ref"] == ref)
+
+    def test_uj_students_need_an_hpcsa_registered_facilitator(self):
+        self.login(MOKOENA)
+        uj = next(u["ref"] for u in self.get("/api/fsa/universities")["data"] if u["name"] == "University of Johannesburg")
+        students = [{"names": "UJ student 1", "studentNumber": "21901"}]
+        r = self.send("post", "/api/fsa/partnerships/cohort", {"organisationRef": uj, "blockRef": "PLN-04", "students": students, "consent": True})
+        self.assertEqual(r.json()["error"], "facilitator_not_accepted")
+        self.assertIn("requires HPCSA-registered facilitators; William holds no HPCSA registration", r.json()["blockedBy"][0])
+        ok = self.send("post", "/api/fsa/partnerships/cohort", {"organisationRef": uj, "blockRef": "PLN-08", "students": students, "consent": True})
+        self.assertEqual(ok.status_code, 200, ok.content)  # Dr Riaan Steyn is HPCSA registered
+
+    def test_a_rule_set_on_a_university_blocks_confirming_its_intake(self):
+        from assurance.placements import requirement_blockers
+        from delivery.models import PlanBlock
+
+        self.login(MOKOENA)
+        up = next(u for u in self.get("/api/fsa/partnerships")["data"]["universities"] if u["name"] == "University of Pretoria")
+        self.assertEqual(self.send("put", f"/api/fsa/universities/{up['ref']}/rule", {"body": "SAATCA"}).status_code, 403)
+        self.login(PALESA)
+        r = self.send("put", f"/api/fsa/universities/{up['ref']}/rule", {"body": "SAATCA"})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIn("SAATCA", requirement_blockers(PlanBlock.objects.get(reference="PLN-03"))[0])
+        step = next(s for s in self.row("PLC-0007")["checklist"] if s["key"] == "facilitator")
+        self.assertFalse(step["done"])
+        self.send("put", f"/api/fsa/universities/{up['ref']}/rule", {"body": None})
+        self.assertEqual(requirement_blockers(PlanBlock.objects.get(reference="PLN-03")), [])
+
+    def test_abattoir_documents_and_confirmation_complete_the_checklist(self):
+        self.login(MOKOENA)
+        self.assertEqual(self.upload("/api/fsa/placements/PLC-0007/abattoir-documents", content=b"not a file").status_code, 422)
+        early = self.send("post", "/api/fsa/placements/PLC-0007/abattoir-confirmed", {"on": "2026-09-01"})
+        self.assertEqual(early.json()["error"], "docs_outstanding")
+        self.assertEqual(self.upload("/api/fsa/placements/PLC-0007/abattoir-documents", "indemnity.pdf").status_code, 200)
+        self.assertEqual(self.send("post", "/api/fsa/placements/PLC-0007/abattoir-confirmed", {"on": "2026-09-02"}).status_code, 200)
+        row = self.row("PLC-0007")
+        done = {s["key"]: s["done"] for s in row["checklist"]}
+        self.assertNotIn("wil", done)  # each student keeps their own WIL book; the hub does not hold it
+        self.assertTrue(done["abattoirDocs"] and done["abattoirConfirmed"] and done["students"])
+        self.assertFalse(done["marking"] or done["report"])
+        self.assertEqual({d["kind"] for d in row["documents"]}, {"Abattoir document"})
+        self.assertEqual(self.client.get(row["documents"][0]["url"]).status_code, 200)
+        self.login(THANDI)
+        self.assertEqual(self.upload("/api/fsa/placements/PLC-0007/abattoir-documents").status_code, 403)
+
+    def test_the_report_is_built_from_the_registers_and_filed_when_submitted(self):
+        from identity.models import Account
+        from learners.models import Enrolment
+
+        self.login(MOKOENA)
+        preview = self.client.get("/api/fsa/placements/PLC-0007/report")
+        self.assertEqual(preview.status_code, 200)
+        self.assertTrue(preview.content.startswith(b"%PDF"))
+        r = self.send("post", "/api/fsa/placements/PLC-0007/report")
+        self.assertEqual(r.json()["error"], "not_ready")
+        self.assertTrue(any("runs until 2026-09-18" in b for b in r.json()["blockedBy"]))
+        self.assertTrue(any("5 not yet marked and moderated" in b for b in r.json()["blockedBy"]))
+
+        riaan, hein = Account.objects.get(reference="USR-0011"), Account.objects.get(reference="USR-0004")
+        for e in Enrolment.objects.filter(plan_block__reference="PLN-03"):
+            res = Result.objects.create(enrolment=e, assessed_by=riaan, assessed_at=dt.datetime(2026, 9, 18, 10, tzinfo=dt.UTC), mark=70,
+                                        outcome="Competent")
+            Moderation.objects.create(result=res, moderated_by=hein, moderated_at=dt.datetime(2026, 9, 21, 10, tzinfo=dt.UTC), outcome="Competent")
+        DemoClock.objects.update_or_create(pk=1, defaults={"today": dt.date(2026, 9, 30)})
+        self.assertEqual(self.row("PLC-0007")["reportBlockedBy"], [])
+        done = self.send("post", "/api/fsa/placements/PLC-0007/report")
+        self.assertEqual(done.status_code, 200, done.content)
+        row = done.json()["data"]
+        self.assertTrue(row["position"].startswith("Report submitted"))
+        self.assertIn("Placement report", {d["kind"] for d in row["documents"]})
+        self.assertEqual(self.send("post", "/api/fsa/placements/PLC-0007/report").json()["error"], "not_ready")
+
+
+class FacilitatorRegions(Api):
+    """Facilitators are assigned regions (provinces and Online); a region with one facilitator is flagged,
+    and how each facilitator keeps up with registers, results and moderation is read from the registers."""
+
+    def region(self, name):
+        return next(g for g in self.get("/api/fsa/facilitators/cover")["data"]["regions"] if g["region"] == name)
+
+    def test_kzn_has_single_cover_and_an_intake_run_from_outside_is_warned(self):
+        self.login(PALESA)
+        kzn = self.region("KwaZulu-Natal")
+        self.assertEqual(kzn["tone"], "warn")
+        self.assertIn("Thandi Ncube only", kzn["position"])
+        self.assertTrue(next(i for i in kzn["intakes"] if i["ref"] == "PLN-08")["fromOutside"])  # Dr Riaan Steyn covers North West
+        plan = {b["ref"]: b for b in self.get("/api/fsa/plan")["data"]}
+        self.assertTrue(any(w["kind"] == "region" and "not KwaZulu-Natal" in w["message"] for w in plan["PLN-08"]["warnings"]))
+        self.assertEqual(self.region("Online")["position"], "In order")
+
+    def test_the_training_manager_assigns_several_regions_including_online(self):
+        self.login(THANDI)
+        self.assertEqual(self.send("put", "/api/fsa/facilitators/USR-0011/regions", {"regions": ["KwaZulu-Natal"]}).status_code, 403)
+        self.login(PALESA)
+        self.assertEqual(self.send("put", "/api/fsa/facilitators/USR-0011/regions", {"regions": ["Mars"]}).status_code, 422)
+        r = self.send("put", "/api/fsa/facilitators/USR-0011/regions", {"regions": ["Online", "KwaZulu-Natal", "North West"]})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["data"]["regions"], ["KwaZulu-Natal", "North West", "Online"])
+        self.assertEqual(self.region("KwaZulu-Natal")["position"], "In order")
+        plan = {b["ref"]: b for b in self.get("/api/fsa/plan")["data"]}
+        self.assertFalse(any(w["kind"] == "region" for w in plan["PLN-08"]["warnings"]))
+
+    def test_work_indicators_show_outcomes_changed_at_moderation(self):
+        self.login(HEIN)
+        self.send("post", "/api/fsa/results/RES-0293/moderate",
+                  {"outcome": "NotYetCompetent", "notes": "Practical not evidenced", "remediation": "Repeat the practical", "reassessBy": "2026-09-30"})
+        self.login(PALESA)
+        thandi = next(r for r in self.get("/api/fsa/facilitators")["data"] if r["name"] == "Thandi Ncube")
+        moderation = next(i for i in thandi["work"]["items"] if i["key"] == "moderation")
+        self.assertIn("changed on RES-0293", moderation["note"])
+        self.assertIn(thandi["work"]["position"], ("Needs attention", "Action required"))
+        self.assertEqual(self.get("/api/fsa/facilitators/USR-0007")["data"]["work"]["position"], thandi["work"]["position"])
+
+
+class PrerequisiteAttempts(Api):
+    """A new prerequisite test result is captured with the marked test, and every attempt stays on record in order."""
+
+    def capture(self, ref, result, content=b"%PDF-1.7 marked test", name="test.pdf"):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        data = {"result": result}
+        if content is not None:
+            data["file"] = SimpleUploadedFile(name, content)
+        return self.client.post(f"/api/fsa/enrolments/{ref}/test", data, HTTP_X_FSA_SCREEN="enrolments")
+
+    def test_each_attempt_is_kept_first_to_latest_with_its_marked_test(self):
+        self.login(MOKOENA)
+        self.assertEqual(self.capture("ENR-0518", "48", content=None).status_code, 422)  # the marked test is required
+        self.assertEqual(self.capture("ENR-0518", "48", name="second.pdf").status_code, 200)
+        r = self.capture("ENR-0518", "62", name="third.pdf")
+        self.assertEqual(r.status_code, 200, r.content)
+        e = r.json()["data"]
+        self.assertEqual(e["prerequisiteResult"], 62.0)  # the latest attempt counts
+        self.assertEqual([(a["n"], a["result"]) for a in e["testAttempts"]], [(1, 44.0), (2, 48.0), (3, 62.0)])
+        self.assertIsNone(e["testAttempts"][0]["file"])  # captured before attempts were kept
+        self.assertEqual(e["testAttempts"][1]["file"]["name"], "second.pdf")
+        self.assertEqual(self.client.get(e["testAttempts"][1]["file"]["url"]).status_code, 200)
+        self.assertNotIn("Prerequisite test result", " ".join(e["gateBlockedBy"]))
+
+
+class AddUniversity(Api):
+    def test_the_training_manager_adds_a_university_with_its_rule(self):
+        self.login(MOKOENA)
+        self.assertEqual(self.send("post", "/api/fsa/universities", {"name": "University of the Free State"}).status_code, 403)
+        self.login(PALESA)
+        r = self.send("post", "/api/fsa/universities", {"name": "  University of the   Free State ", "body": "HPCSA"})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual((r.json()["data"]["name"], r.json()["data"]["rule"]), ("University of the Free State", "HPCSA"))
+        self.assertEqual(self.send("post", "/api/fsa/universities", {"name": "university of the free state"}).json()["error"], "duplicate")
+        self.assertIn("University of the Free State", [u["name"] for u in self.get("/api/fsa/universities")["data"]])
+
+
+class SessionGroups(Api):
+    def test_a_session_names_the_university_its_students_come_from(self):
+        self.login("USR-0011")  # Dr Riaan Steyn sees his own sessions
+        rows = self.get("/api/fsa/sessions")["data"]["items"]
+        up = next(r for r in rows if r["block"] == "PLN-03")
+        self.assertEqual([(g["name"], g["short"], g["learners"]) for g in up["groups"]], [("University of Pretoria", "UP", 5)])
+
+
+class ManagementDashboard(Api):
+    def test_the_dashboard_reads_throughput_courses_seasons_marketing_and_effectiveness(self):
+        self.login(THANDI)
+        self.assertEqual(self.client.get("/api/fsa/dashboard").status_code, 403)
+        self.login(PALESA)
+        d = self.get("/api/fsa/dashboard?months=12")["data"]
+        self.assertEqual(len(d["throughput"]["months"]), 12)
+        self.assertEqual([f["label"] for f in d["throughput"]["funnel"]], ["Registered", "Confirmed", "Assessed", "Competent", "Certified"])
+        pme = next(c for c in d["courses"] if c["course"].startswith("PME 1"))
+        self.assertEqual((pme["competent"], pme["nyc"]), (2, 1))  # RES-0288 and RES-0289 competent, RES-0290 not yet
+        self.assertEqual(len(d["seasons"]["enquiries"]), 12)
+        self.assertGreater(d["marketing"]["funnel"]["enquiries"], 0)
+        self.assertIn("Phone", {g["name"] for g in d["marketing"]["byChannel"]})
+        self.assertIsNotNone(d["effectiveness"]["enquiries"]["onTime"])
+        only = self.get("/api/fsa/dashboard?months=6&course=TRN-HYG")["data"]
+        self.assertTrue(all(c["course"] == "Food hygiene and GMP" for c in only["courses"]))
+        self.assertEqual(self.client.get("/api/fsa/dashboard?months=7").status_code, 422)
+
+
+
+class Campaigns(Api):
+    """Marketing records its campaigns; each enquiry says how the person heard about FSA; a campaign's results are
+    read from the registers and its evaluation goes back to FSA."""
+
+    def test_an_enquiry_names_its_campaign_and_the_campaign_reports_what_it_brought(self):
+        self.login(PALESA)
+        bad = self.send("post", "/api/fsa/campaigns", {"name": "", "channel": "Billboard", "starts": "2026-09-10", "ends": "2026-09-01"})
+        self.assertEqual(len(bad.json()["blockedBy"]), 3)
+        c = self.send("post", "/api/fsa/campaigns", {"name": "Spring meat examiner drive", "channel": "Social media",
+                                                     "starts": "2026-09-01", "ends": "2026-09-30", "courses": ["TRN-PME1"], "cost": "5 000"})
+        self.assertEqual(c.status_code, 200, c.content)
+        ref = c.json()["data"]["ref"]
+        self.assertEqual(c.json()["data"]["cost"], "R 5 000.00")
+        options = self.get("/api/fsa/campaigns/options")["data"]
+        self.assertIn(ref, [x["ref"] for x in options["campaigns"]])
+        missing = self.send("post", "/api/fsa/enquiries", {"names": "Sizwe Dube", "channel": "WhatsApp", "topics": ["Costs"],
+                                                          "enquiringFor": "Individual", "courseCode": "TRN-PME1", "source": "Campaign"})
+        self.assertIn("Choose the campaign that brought them.", missing.json()["blockedBy"])
+        e = self.send("post", "/api/fsa/enquiries", {"names": "Sizwe Dube", "channel": "WhatsApp", "topics": ["Costs"], "enquiringFor": "Individual",
+                                                    "courseCode": "TRN-PME1", "source": "Campaign", "campaignRef": ref})
+        self.assertEqual(e.status_code, 200, e.content)
+        self.assertEqual(e.json()["data"]["sourceLabel"], "Campaign: Spring meat examiner drive")
+        row = next(x for x in self.get("/api/fsa/campaigns")["data"]["items"] if x["ref"] == ref)
+        self.assertEqual((row["results"]["enquiries"], row["results"]["costPerEnquiry"]), (1, "R 5 000.00"))
+        self.assertEqual(row["results"]["state"], "Running")
+        rec = self.send("patch", f"/api/fsa/campaigns/{ref}", {"recommendations": "Run again before the February intake."})
+        self.assertEqual(rec.status_code, 200, rec.content)
+        self.assertEqual(rec.json()["data"]["recommendations"], "Run again before the February intake.")
+        board = self.get("/api/fsa/dashboard")["data"]["marketing"]
+        self.assertIn("A campaign", {g["name"] for g in board["bySource"]})
+        self.assertEqual(board["campaigns"][0]["ref"], ref)
+        self.login(THANDI)
+        self.assertEqual(self.send("post", "/api/fsa/campaigns", {"name": "x"}).status_code, 403)
+
+
+class CourseEvaluations(Api):
+    """Learners evaluate the course through a private link after the intake ends; staff see the scores, not who said what."""
+
+    def test_learners_answer_once_and_the_scores_reach_the_facilitator_and_the_dashboard(self):
+        self.login(PALESA)
+        reg = self.get("/api/fsa/feedback")["data"]
+        pln11 = next(i for i in reg["items"] if i["intake"] == "PLN-11")  # William's PME 1 intake, ended 2026-08-28
+        self.assertEqual((pln11["asked"], pln11["answered"]), (3, 0))
+        links = [l["link"].rsplit("/", 1)[-1] for l in pln11["learners"]]
+        self.client.post("/api/fsa/auth/logout")
+        view = self.client.get(f"/api/fsa/public/feedback/{links[0]}")  # no sign-in needed
+        self.assertEqual(view.status_code, 200)
+        self.assertEqual(view.json()["data"]["facilitator"], "William")
+        self.assertEqual(self.client.get("/api/fsa/public/feedback/not-a-token").status_code, 404)
+        bad = self.client.post(f"/api/fsa/public/feedback/{links[0]}", {"content": 9}, content_type="application/json")
+        self.assertEqual(bad.status_code, 422)
+        answer = {"content": 4, "facilitation": 2, "venue": 4, "organisation": 3, "recommend": True, "comments": "Too fast on day two."}
+        for t in links:
+            self.assertEqual(self.client.post(f"/api/fsa/public/feedback/{t}", answer, content_type="application/json").status_code, 200)
+        again = self.client.post(f"/api/fsa/public/feedback/{links[0]}", answer, content_type="application/json")
+        self.assertEqual(again.json()["error"], "already_submitted")
+        self.login(PALESA)
+        pln11 = next(i for i in self.get("/api/fsa/feedback")["data"]["items"] if i["intake"] == "PLN-11")
+        self.assertEqual((pln11["answered"], pln11["scores"]["facilitation"], pln11["recommend"]), (3, 2.0, 100))
+        self.assertEqual(pln11["comments"], ["Too fast on day two."] * 3)
+        william = next(r for r in self.get("/api/fsa/facilitators")["data"] if r["name"] == "William")
+        rating = next(i for i in william["work"]["items"] if i["key"] == "feedback")
+        self.assertEqual((rating["tone"], rating["note"]), ("bad", "2.0 out of 5 from 3 learners"))
+        self.assertEqual(self.get("/api/fsa/dashboard")["data"]["effectiveness"]["feedback"]["answered"], 3)
+
+
+class SuperAdmin(Api):
+    def test_create_superadmin_gives_the_system_administrator_role_and_change_access_everywhere(self):
+        from django.core.management import call_command
+
+        from identity.models import Account, Segment
+
+        call_command("create_superadmin", "Test Superadmin", stdout=open("nul" if __import__("os").name == "nt" else "/dev/null", "w"))
+        a = Account.objects.get(display_name="Test Superadmin")
+        self.assertEqual(a.hub_role, "SystemAdministrator")
+        self.assertTrue(all(a.can(code, write=True) for code in Segment.objects.values_list("code", flat=True)))

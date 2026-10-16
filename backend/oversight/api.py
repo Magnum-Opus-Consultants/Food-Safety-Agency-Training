@@ -45,3 +45,14 @@ def desk(request):
         "channelRule": rules.CHANNEL_RULE,
         "rotation": on_rotation,
     }, today=today.isoformat())
+
+
+@router.get("/dashboard")
+def dashboard(request, months: int = 12, course: str = ""):
+    """The management dashboard, read from the registers on every call."""
+    from oversight import dashboard as board
+
+    require(request, "reporting", message="The management dashboard is for the training manager and the GMs.")
+    if months not in (3, 6, 12, 24):
+        raise Refusal("invalid", ["Choose 3, 6, 12 or 24 months."], "Check the period.", status=422)
+    return ok(board.build(months, course), source="Enquiries · quotations · enrolments · results · moderation · certificates · registers")

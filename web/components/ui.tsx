@@ -152,10 +152,11 @@ export function AuditTrail({ screen }: { screen?: string }) {
   );
 }
 
-export function Loading({ what = "register" }: { what?: string }) {
+/** A page still reading its register shows its heading; a panel inside a page (inline) shows only the spinner. */
+export function Loading({ what = "register", inline = false }: { what?: string; inline?: boolean }) {
   return (
     <>
-      <PageHeader />
+      {inline ? null : <PageHeader />}
       <div className="card" style={{ padding: 20, display: "flex", alignItems: "center", gap: 10, color: "var(--aps-muted)" }}>
         <i className="fas fa-spinner fa-spin" style={{ color: "var(--aps-teal)" }} aria-hidden /> Reading the {what}…
       </div>

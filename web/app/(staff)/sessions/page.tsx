@@ -7,9 +7,11 @@ import type { SessionRow } from "@/lib/types";
 import { useRegister } from "@/lib/hooks";
 
 
+const RANK: Record<string, number> = { Today: 0, "In progress": 0, Outstanding: 1, "Not yet delivered": 2, Locked: 3 };
+
 export default function Sessions() {
   const [open, setOpen] = useState<string | null>(null);
-  const [filter, setFilter] = useState({ q: "", register: "", facilitator: "", course: "", from: "", to: "" });
+  const [filter, setFilter] = useState({ q: "", register: "", facilitator: "", course: "", group: "", from: "", to: "" });
   const setF = (k: keyof typeof filter, v: string) => setFilter((x) => ({ ...x, [k]: v }));
   const q = useRegister<{ items: SessionRow[]; stats: Stat[]; scope: string }>("/sessions");
   if (q.error) return <LoadError error={q.error} />;
@@ -20,12 +22,20 @@ export default function Sessions() {
     .filter((x) => !filter.register || x.registerState === filter.register)
     .filter((x) => !filter.facilitator || x.facilitator === filter.facilitator)
     .filter((x) => !filter.course || x.course === filter.course)
+    .filter((x) => !filter.group || x.groups.some((g) => g.name === filter.group))
     .filter((x) => !filter.from || x.end >= filter.from)
     .filter((x) => !filter.to || x.start <= filter.to)
-    .filter((x) => words.every((w) => `${x.ref} ${x.block} ${x.course} ${x.venue} ${x.facilitator}`.toLowerCase().includes(w)));
+    .filter((x) => words.every((w) => `${x.ref} ${x.block} ${x.course} ${x.venue} ${x.facilitator} ${x.groups.map((g) => `${g.name} ${g.short}`).join(" ")}`
+      .toLowerCase().includes(w)))
+    // What needs capturing first: today's registers (a day of a recurring class, or a whole intake running today),
+    // then registers still outstanding, then what is coming up (soonest first), and locked registers last (latest first).
+    .sort((a, b) => RANK[a.registerState] - RANK[b.registerState]
+      || (a.registerState === "Locked" ? (b.day ?? b.start).localeCompare(a.day ?? a.start) : (a.day ?? a.start).localeCompare(b.day ?? b.start))
+      || a.ref.localeCompare(b.ref));
   const filtered = Object.values(filter).some(Boolean);
   const facilitators = Array.from(new Set(all.map((x) => x.facilitator))).sort();
   const courses = Array.from(new Set(all.map((x) => x.course))).sort();
+  const groups = Array.from(new Set(all.flatMap((x) => x.groups.map((g) => g.name)))).sort();
   const count = (st: string) => all.filter((x) => x.registerState === st).length;
   const outstanding = all.filter((s) => s.registerState === "Outstanding");
   return (
@@ -40,7 +50,11 @@ export default function Sessions() {
       <div className="card filter-bar">
         <div className="field filter-search"><label htmlFor="sf-q">Search</label>
           <input id="sf-q" type="search" value={filter.q} onChange={(e) => setF("q", e.target.value)}
-                 placeholder="Session, intake, course, venue or facilitator" /></div>
+                 placeholder="University or company, course, venue, intake or session" /></div>
+        <div className="field"><label htmlFor="sf-group">Group</label>
+          <select id="sf-group" value={filter.group} onChange={(e) => setF("group", e.target.value)}>
+            <option value="">Any group</option>{groups.map((g) => <option key={g}>{g}</option>)}
+          </select></div>
         <div className="field"><label htmlFor="sf-reg">Register</label>
           <select id="sf-reg" value={filter.register} onChange={(e) => setF("register", e.target.value)}>
             <option value="">Any</option>
@@ -60,14 +74,18 @@ export default function Sessions() {
           <input id="sf-to" type="date" value={filter.to} min={filter.from || undefined} onChange={(e) => setF("to", e.target.value)} /></div>
         <div className="filter-foot">
           <span className="small muted">Showing {items.length} of {all.length} sessions</span>
-          {filtered ? <button className="btn btn-sm" onClick={() => setFilter({ q: "", register: "", facilitator: "", course: "", from: "", to: "" })}>Clear filters</button> : null}
+          {filtered ? <button className="btn btn-sm" onClick={() => setFilter({ q: "", register: "", facilitator: "", course: "", group: "", from: "", to: "" })}>Clear filters</button> : null}
         </div>
       </div>
       <Register rows={items} rowKey={(s) => s.ref} empty={filtered ? "No session matches these filters." : undefined} onRow={(s) => setOpen(s.ref === open ? null : s.ref)}
         expanded={(s) => (s.ref === open ? <SessionPanel code={s.ref} /> : null)} source={q.data.meta.source as string}
         columns={[
           { key: "ref", label: "Session", render: (s) => s.ref, mono: true },
-          { key: "course", label: "Course", render: (s) => <><b>{s.course}</b><div className="small muted">{s.venue}</div></> },
+          { key: "group", label: "Group", render: (s) => s.groups.length ? s.groups.map((g) => (
+            <div key={g.name}><b>{g.name}</b>{g.short ? <span className="small muted"> ({g.short})</span> : null}
+              <span className="small muted"> · {g.learners} {g.learners === 1 ? "learner" : "learners"}</span></div>
+          )) : <span className="small muted">No learners confirmed yet</span> },
+          { key: "course", label: "Course", render: (s) => <>{s.course}<div className="small muted">{s.venue}</div></> },
           { key: "fac", label: "Facilitator", render: (s) => s.facilitator },
           { key: "dates", label: "Date", render: (s) => s.day ? (
             <>{new Date(s.day + "T00:00:00").toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short", year: "numeric" })}

@@ -42,7 +42,6 @@ export default function Shell({ children }: { children: ReactNode }) {
     queryFn: () => api<NavCounts>("/nav-counts"),
     enabled: me.isSuccess,
   });
-  const clock = useAction<{ days?: number; reset?: boolean }>("POST", "/clock");
   const logout = useAction("POST", "/auth/logout");
 
   useEffect(() => {
@@ -60,8 +59,6 @@ export default function Shell({ children }: { children: ReactNode }) {
     return <div className="content"><p className="muted">{me.isError ? "Signing you out…" : "Opening the Training Hub…"}</p></div>;
   }
   const user = me.data.data;
-  const today = (counts.data?.meta.today as string | undefined) ?? (me.data.meta.today as string | undefined);
-  const moved = Boolean(counts.data?.meta.clockMoved ?? me.data.meta.clockMoved);
   const where = findNav(pathname);
   const badges = counts.data?.data ?? {};
 
@@ -131,24 +128,6 @@ export default function Shell({ children }: { children: ReactNode }) {
           <button onClick={() => setOpen(true)} aria-label="Open menu"><i className="fas fa-bars" aria-hidden /></button>
         </div>
         <main className="content">
-          <div className="clock-slot">
-            <div className={`clock${moved ? " moved" : ""}`} title={moved ? "Demo date: moved away from today" : "Today"}>
-              {user.canMoveClock ? (
-                <button disabled={clock.isPending} onClick={() => clock.mutate({ days: -1 })} aria-label="Move the demo clock back a day">
-                  <i className="fas fa-chevron-left" aria-hidden />
-                </button>
-              ) : null}
-              <span>{moved ? <b className="clock-flag">Demo date</b> : null}<i className="far fa-calendar" aria-hidden /> {longDate(today)}</span>
-              {user.canMoveClock ? (
-                <button disabled={clock.isPending} onClick={() => clock.mutate({ days: 1 })} aria-label="Move the demo clock forward a day">
-                  <i className="fas fa-chevron-right" aria-hidden />
-                </button>
-              ) : null}
-              {user.canMoveClock && moved ? (
-                <button className="clock-today" disabled={clock.isPending} onClick={() => clock.mutate({ reset: true })}>Back to today</button>
-              ) : null}
-            </div>
-          </div>
           {children}
         </main>
       </div>

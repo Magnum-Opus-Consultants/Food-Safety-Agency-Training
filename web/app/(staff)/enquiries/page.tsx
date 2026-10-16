@@ -8,6 +8,7 @@ import { DelegatesForm, Modal, RegisterLearnerForm } from "@/components/registra
 import { EnquiryEditor } from "@/components/EnquiryEditor";
 import { PhoneInput } from "@/components/PhoneInput";
 import { TopicPicker } from "@/components/TopicPicker";
+import { SourcePicker } from "@/components/SourcePicker";
 import { NewQuotationForm } from "@/components/QuoteForm";
 import { courseOptions, SearchSelect } from "@/components/SearchSelect";
 
@@ -106,6 +107,8 @@ export default function EnquiryQueue() {
     if (form.kind === "Enquiry") {
       if (!formTopics.topics.length) logErrors.topics = "Tick at least one thing they asked about.";
       if (formTopics.topics.includes("Other") && !formTopics.other.trim()) logErrors.topicOther = "Describe the other question they asked.";
+      if (!form.source) logErrors.source = "Ask how they heard about us (choose “Did not say” if they did not).";
+      else if (form.source === "Campaign" && !form.campaignRef) logErrors.campaign = "Choose the campaign that brought them.";
     } else if (!(form.interest ?? "").trim()) logErrors.interest = `Describe the ${(form.kind ?? "").toLowerCase()}.`;
   }
   const logBlocked = Object.keys(logErrors).length > 0;
@@ -197,6 +200,11 @@ export default function EnquiryQueue() {
               <SearchSelect id="cc" options={courseOptions(courses.data?.data ?? [], "Not a catalogue course")} value={form.courseCode ?? ""}
                             placeholder="Type to search courses…" emptyText="No course matches"
                             onChange={(v) => setForm({ ...form, courseCode: v })} /></div>
+            {form.kind === "Enquiry" ? (
+              <SourcePicker idPrefix="log" source={form.source ?? ""} campaignRef={form.campaignRef ?? ""}
+                            errors={{ source: logErrors.source, campaign: logErrors.campaign }}
+                            onChange={(source, campaignRef) => setForm({ ...form, source, campaignRef })} />
+            ) : null}
             {form.kind === "Enquiry" && !form.courseCode ? (
               <div className="field"><label htmlFor="i">Course not in the catalogue (optional)</label><input id="i" value={form.interest ?? ""} placeholder="Which training they meant" onChange={(e) => setForm({ ...form, interest: e.target.value })} /></div>
             ) : null}

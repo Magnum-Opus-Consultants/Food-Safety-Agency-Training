@@ -1,6 +1,6 @@
 from django.db import models
 
-from core.models import ReferencedModel
+from core.models import ReferencedModel, TrackedModel
 from courses.models import Course
 from delivery.models import PlanBlock, Session
 from demand.models import Contact, Organisation, Quotation
@@ -72,6 +72,18 @@ class Enrolment(ReferencedModel):
         return ENR_STAGES[self.stage_index]
 
 
+class PrerequisiteAttempt(TrackedModel):
+    """Each sitting of the prerequisite test, in order, with the marked test it was read from. The latest
+    one is the enrolment's prerequisite result; earlier ones stay on record."""
+
+    enrolment = models.ForeignKey(Enrolment, on_delete=models.PROTECT, related_name="prerequisite_attempts")
+    result = models.DecimalField(max_digits=5, decimal_places=2)
+    document = models.ForeignKey("assurance.Document", null=True, blank=True, on_delete=models.PROTECT, related_name="+")
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+
 class Result(ReferencedModel):
     REF_PREFIX = "RES"
     enrolment = models.ForeignKey(Enrolment, on_delete=models.PROTECT, related_name="results")
@@ -94,6 +106,22 @@ class Moderation(models.Model):
     moderated_at = models.DateTimeField()
     outcome = models.CharField(max_length=16, choices=[("Competent", "Competent"), ("NotYetCompetent", "Not yet competent")])
     notes = models.TextField(blank=True)
+
+
+class Evaluation(TrackedModel):
+    """A learner's evaluation of the course they attended. Requested when the intake ends, answered once
+    through a private link (no sign-in), and read only in aggregate by facilitator and course."""
+
+    enrolment = models.OneToOneField(Enrolment, on_delete=models.PROTECT, related_name="evaluation")
+    facilitator = models.ForeignKey(Account, null=True, on_delete=models.PROTECT, related_name="+")
+    token = models.CharField(max_length=40, unique=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    content = models.PositiveSmallIntegerField(null=True, blank=True)       # 1 to 5
+    facilitation = models.PositiveSmallIntegerField(null=True, blank=True)  # 1 to 5
+    venue = models.PositiveSmallIntegerField(null=True, blank=True)         # 1 to 5
+    organisation = models.PositiveSmallIntegerField(null=True, blank=True)  # 1 to 5: admin, communication, timing
+    recommend = models.BooleanField(null=True, blank=True)
+    comments = models.TextField(blank=True)
 
 
 class Certificate(models.Model):
