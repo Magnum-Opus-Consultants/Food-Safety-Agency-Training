@@ -115,9 +115,14 @@ STATIC_URL = "static/"
 # origin, so cookies are first-party and no CORS is needed.
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_SECURE = not DEBUG
+# Cookies travel over HTTPS only in production. FSA_SECURE_COOKIES=false allows testing a server over plain
+# HTTP (on the LAN or NetBird) before its domain and certificate are in place.
+SECURE_COOKIES = env_bool("FSA_SECURE_COOKIES", not DEBUG)
+SESSION_COOKIE_SECURE = SECURE_COOKIES
 CSRF_COOKIE_SAMESITE = "Lax"
-CSRF_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = SECURE_COOKIES
+# Behind the edge proxy, which terminates HTTPS and says so in X-Forwarded-Proto.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 CSRF_TRUSTED_ORIGINS = os.environ.get(
     "DJANGO_CSRF_TRUSTED_ORIGINS", "http://localhost:3210,http://127.0.0.1:3210"
 ).split(",")
